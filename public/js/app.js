@@ -141,7 +141,7 @@ function renderShell() {
       </aside>
       <div class="app-main-col">
         <div class="app-header">
-          <button class="menu-toggle-btn" id="menuToggle">${ICONS.menu()}</button>
+          <button class="menu-toggle-btn" id="menuToggle">☰</button>
           <div class="header-search">
             ${ICONS.search()}
             <input type="text" placeholder="بحث..." id="globalSearchInput">
@@ -180,6 +180,17 @@ function renderShell() {
     document.getElementById('sidebarOverlay').classList.toggle('show', isOpen);
   });
   document.getElementById('sidebarOverlay').addEventListener('click', closeSidebarMobile);
+
+  // 🆕 حماية إضافية بالجافاسكربت — تُخفي شريط البحث بناءً على العرض
+  // الحقيقي للشاشة (window.innerWidth)، بلا اعتماد على استعلامات CSS
+  // إطلاقاً. تعمل حتى لو تعطّلت الاستعلامات لأي سبب متعلّق بالمتصفح.
+  function applyResponsiveJS() {
+    const isMobile = window.innerWidth <= 860;
+    const searchBox = document.querySelector('.header-search');
+    if (searchBox) searchBox.style.display = isMobile ? 'none' : 'flex';
+  }
+  applyResponsiveJS();
+  window.addEventListener('resize', applyResponsiveJS);
 
   // 🆕 طيّ الشريط الجانبي (أيقونات فقط) — يُحفَظ الاختيار بالمتصفح، يعمل على سطح المكتب فقط (الجوال له سلوك منفصل)
   const collapseBtn = document.getElementById('sidebarCollapseBtn');
