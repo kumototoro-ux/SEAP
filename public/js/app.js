@@ -12,11 +12,12 @@ const APP = { token: null, user: null };
 const PAGE_REGISTRY = {
   home: { label: '🏠 الرئيسية', render: renderHomeView },
   employees: { label: '👩‍🏫 الموظفون', render: renderEmployeesView },
+  users: { label: '🔐 المستخدمون', render: renderUsersView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees'],
+  role_admin: ['home', 'employees', 'users'],
 };
 
 function pagesForCurrentUser() {
@@ -432,6 +433,96 @@ function renderEmployeesTable() {
         await apiCall('delete-employee', { method: 'POST', body: { id: btn.getAttribute('data-id') } });
         showToast('تم الحذف بنجاح', 'success');
         loadEmployeesList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+}
+
+/* ===================== صفحة المستخدمون ===================== */
+
+async function renderUsersView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2>🔐 حسابات الموظفين</h2>
+      <div class="field"><label>🔍 بحث بالاسم أو اسم المستخدم</label><input id="userSearchInput" type="text"></div>
+      <div id="usersListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('userSearchInput').addEventListener('input', renderUsersTable);
+  loadUsersList();
+}
+
+async function loadUsersList() {
+  const area = document.getElementById('usersListArea');
+  try {
+    APP.allUsers = await apiCall('list-users', { method: 'GET' });
+    renderUsersTable();
+  } catch (e) {
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderUsersTable() {
+  const area = document.getElementById('usersListArea');
+  const q = (document.getElementById('userSearchInput').value || '').trim().toLowerCase();
+  const list = APP.allUsers.filter((u) => !q || u.nameAr.toLowerCase().includes(q) || u.username.toLowerCase().includes(q));
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد حسابات مطابقة</p>'; return; }
+
+  area.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="text-align:right;border-bottom:2px solid #eee">
+        <th style="padding:8px">الاسم</th><th style="padding:8px">اسم المستخدم</th><th style="padding:8px">الدور</th>
+        <th style="padding:8px">الحالة</th><th style="padding:8px"></th>
+      </tr></thead>
+      <tbody>
+        ${list.map((u) => {
+          const isActive = u.status === 'active';
+          return `
+          <tr style="border-bottom:1px solid #f0f0f0">
+            <td style="padding:8px">${escapeHtml(u.nameAr)}</td>
+            <td style="padding:8px">${escapeHtml(u.username)}</td>
+            <td style="padding:8px">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role || '—')}</td>
+            <td style="padding:8px">
+              <span style="padding:3px 10px;border-radius:999px;font-size:11.5px;color:#fff;background:${isActive ? '#2f5233' : '#c62828'}">
+                ${isActive ? '🟢 مفعَّل' : '🔴 معطَّل'}
+              </span>
+            </td>
+            <td style="padding:8px;white-space:nowrap">
+              <button type="button" class="btn-toggle-user" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}" style="background:${isActive ? '#c62828' : '#2f5233'}">
+                ${isActive ? 'تعطيل' : 'تفعيل'}
+              </button>
+              <button type="button" class="btn-reset-pass" data-id="${escapeHtml(u.id)}" data-name="${escapeHtml(u.nameAr)}" style="background:#888">🔑 إعادة تعيين</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+
+  area.querySelectorAll('.btn-toggle-user').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const newStatus = btn.getAttribute('data-new-status');
+      if (!confirm(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
+      try {
+        await apiCall('toggle-user-status', { method: 'POST', body: { id: btn.getAttribute('data-id'), newStatus } });
+        showToast(newStatus === 'active' ? 'تم التفعيل' : 'تم التعطيل', 'success');
+        loadUsersList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+
+  area.querySelectorAll('.btn-reset-pass').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`)) return;
+      try {
+        const result = await apiCall('reset-user-password', { method: 'POST', body: { id: btn.getAttribute('data-id') } });
+        showToast('تمت إعادة التعيين — كلمة المرور الجديدة: ' + result.tempPassword, 'success');
       } catch (e) {
         showToast(e.message, 'error');
       }
