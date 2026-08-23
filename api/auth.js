@@ -25,7 +25,7 @@ async function handleLogin(req, res) {
     .from('users')
     .select(`
       id, username, password_hash, status,
-      employees:id ( id, national_id, name_ar, branch, role, user_type, grades, sections, subjects )
+      employees:id ( id, national_id, name_ar, branch, role, user_type, grades, sections, subjects, employee_branches(branch) )
     `)
     .eq('username', username)
     .maybeSingle();
@@ -53,9 +53,10 @@ async function handleLogin(req, res) {
   const employee = userRow.employees;
   const isFirstLogin = await bcrypt.compare(employee.national_id, userRow.password_hash);
 
+  const allBranches = [employee.branch, ...(employee.employee_branches || []).map((b) => b.branch)];
   const userPayload = {
     id: employee.id, fullName: employee.name_ar, username: userRow.username,
-    branch: employee.branch, userType: employee.user_type, role: employee.role,
+    branch: employee.branch, allBranches, userType: employee.user_type, role: employee.role,
     subject: employee.subjects, grades: employee.grades, sections: employee.sections,
   };
 
