@@ -10,7 +10,7 @@ import { supabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth, requireRole } from '../lib/auth.js';
 import { apiHandler } from '../lib/apiHandler.js';
 import { validateBody, addEmployeeSchema } from '../lib/validation.js';
-import { generateNextEmployeeId } from '../lib/idGenerator.js';
+import { generateEmployeeId } from '../lib/idGenerator.js';
 
 export default apiHandler(async function addEmployee(req, res) {
   if (req.method !== 'POST') {
@@ -32,7 +32,7 @@ export default apiHandler(async function addEmployee(req, res) {
     throw err;
   }
 
-  const newId = await generateNextEmployeeId(supabaseAdmin);
+  const newId = await generateEmployeeId(supabaseAdmin);
 
   const { error: empError } = await supabaseAdmin.from('employees').insert({
     id: newId,
