@@ -19,10 +19,17 @@ export default apiHandler(async function listEmployees(req, res) {
 
   const { data, error } = await supabaseAdmin
     .from('employees')
-    .select('id, national_id, name_ar, name_en, user_type, role, gender, branch, stage, grades, sections, subjects, created_at')
+    .select('id, national_id, name_ar, name_en, user_type, role, gender, branch, stage, grades, sections, subjects, created_at, employee_branches(branch)')
     .order('created_at', { ascending: false });
 
   if (error) throw error;
 
-  return res.status(200).json({ success: true, data });
+  // 🆕 دمج الفرع الأساسي مع الفروع الإضافية بمصفوفة واحدة سهلة الاستخدام بالواجهة
+  const enriched = data.map((emp) => ({
+    ...emp,
+    all_branches: [emp.branch, ...(emp.employee_branches || []).map((b) => b.branch)],
+    employee_branches: undefined,
+  }));
+
+  return res.status(200).json({ success: true, data: enriched });
 });
