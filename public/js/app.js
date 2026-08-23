@@ -161,6 +161,7 @@ function renderShell() {
           </div>
         </div>
         <main class="main-content" id="mainContent"></main>
+        <nav class="bottom-nav" id="bottomNav"></nav>
       </div>
     </div>`;
 
@@ -172,6 +173,30 @@ function renderShell() {
   document.querySelectorAll('#sidebarNav a').forEach((a) => {
     a.addEventListener('click', () => { navigate(a.getAttribute('data-view')); closeSidebarMobile(); });
   });
+
+  // 🆕 الشريط السفلي بالجوال — 4 اختصارات ثابتة (لا تتبع PAGE_REGISTRY)، منفصلة تماماً
+  // عن القائمة الجانبية اللي تبقى تحتوي كل الصفحات الأخرى (تُفتَح بزر ☰)
+  const BOTTOM_NAV_ITEMS = [
+    { key: 'home', label: 'الرئيسية', icon: 'home', ready: true },
+    { key: 'messages', label: 'المراسلات', icon: 'messages', ready: false },
+    { key: 'search', label: 'بحث', icon: 'search', ready: false },
+    { key: 'tasks', label: 'المهام', icon: 'tasks', ready: false },
+  ];
+  document.getElementById('bottomNav').innerHTML = BOTTOM_NAV_ITEMS
+    .map((item) => `<a data-bottom-key="${item.key}" data-ready="${item.ready}">${ICONS[item.icon]()}<span>${item.label}</span></a>`)
+    .join('');
+
+  document.querySelectorAll('#bottomNav a').forEach((a) => {
+    a.addEventListener('click', () => {
+      const key = a.getAttribute('data-bottom-key');
+      const isReady = a.getAttribute('data-ready') === 'true';
+      if (!isReady) { showToast('قريباً — هذي الصفحة لم تُبنَ بعد', 'error'); return; }
+      navigate(key);
+      document.querySelectorAll('#bottomNav a').forEach((x) => x.classList.remove('active'));
+      a.classList.add('active');
+    });
+  });
+  document.querySelector('#bottomNav a[data-bottom-key="home"]')?.classList.add('active');
 
   document.getElementById('logoutBtn').addEventListener('click', doLogout);
   document.getElementById('menuToggle').addEventListener('click', (e) => {
@@ -189,6 +214,8 @@ function renderShell() {
     const isMobile = window.innerWidth <= 860;
     const searchBox = document.querySelector('.header-search');
     if (searchBox) searchBox.style.display = isMobile ? 'none' : 'flex';
+    const bottomNavEl = document.getElementById('bottomNav');
+    if (bottomNavEl) bottomNavEl.style.display = isMobile ? 'flex' : 'none';
   }
   applyResponsiveJS();
   window.addEventListener('resize', applyResponsiveJS);
