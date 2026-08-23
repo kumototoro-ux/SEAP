@@ -142,6 +142,7 @@ function renderShell() {
       <div class="app-main-col">
         <div class="app-header">
           <button class="menu-toggle-btn" id="menuToggle">☰</button>
+          <div class="header-brand-mobile">${mirqatLogo(24)}<span>مِرقاة</span></div>
           <div class="header-search">
             ${ICONS.search()}
             <input type="text" placeholder="بحث..." id="globalSearchInput">
@@ -471,10 +472,10 @@ function renderEmployeesTable() {
       <tbody>
         ${list.map((e) => `
           <tr style="border-bottom:1px solid #f0f0f0">
-            <td style="padding:8px">${escapeHtml(e.name_ar)}</td>
-            <td style="padding:8px">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</td>
-            <td style="padding:8px">${escapeHtml(e.all_branches.join('، '))}</td>
-            <td style="padding:8px;white-space:nowrap">
+            <td style="padding:8px" data-label="الاسم">${escapeHtml(e.name_ar)}</td>
+            <td style="padding:8px" data-label="الدور">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</td>
+            <td style="padding:8px" data-label="الفروع">${escapeHtml(e.all_branches.join('، '))}</td>
+            <td style="padding:8px;white-space:nowrap" data-label="إجراءات">
               <button type="button" class="btn-icon-edit" data-id="${escapeHtml(e.id)}">${ICONS.edit()}</button>
               <button type="button" class="btn-icon-delete" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.name_ar)}">${ICONS.trash()}</button>
             </td>
@@ -680,11 +681,11 @@ function renderStudentsTable() {
       <tbody>
         ${list.map((s) => `
           <tr style="border-bottom:1px solid #f0f0f0">
-            <td style="padding:8px">${escapeHtml(s.name_ar)}</td>
-            <td style="padding:8px">${escapeHtml(s.grade)}</td>
-            <td style="padding:8px">${escapeHtml(s.section)}</td>
-            <td style="padding:8px">${escapeHtml(s.branch)}</td>
-            <td style="padding:8px;white-space:nowrap">
+            <td style="padding:8px" data-label="الاسم">${escapeHtml(s.name_ar)}</td>
+            <td style="padding:8px" data-label="الصف">${escapeHtml(s.grade)}</td>
+            <td style="padding:8px" data-label="الشعبة">${escapeHtml(s.section)}</td>
+            <td style="padding:8px" data-label="الفرع">${escapeHtml(s.branch)}</td>
+            <td style="padding:8px;white-space:nowrap" data-label="إجراءات">
               <button type="button" class="btn-icon-edit" data-id="${escapeHtml(s.id)}">${ICONS.edit()}</button>
               <button type="button" class="btn-icon-delete" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name_ar)}">${ICONS.trash()}</button>
             </td>
@@ -756,15 +757,15 @@ function renderUsersTable() {
           const isActive = u.status === 'active';
           return `
           <tr style="border-bottom:1px solid #f0f0f0">
-            <td style="padding:8px">${escapeHtml(u.nameAr)}</td>
-            <td style="padding:8px">${escapeHtml(u.username)}</td>
-            <td style="padding:8px">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role || '—')}</td>
-            <td style="padding:8px">
+            <td style="padding:8px" data-label="الاسم">${escapeHtml(u.nameAr)}</td>
+            <td style="padding:8px" data-label="اسم المستخدم">${escapeHtml(u.username)}</td>
+            <td style="padding:8px" data-label="الدور">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role || '—')}</td>
+            <td style="padding:8px" data-label="الحالة">
               <span style="padding:3px 10px;border-radius:999px;font-size:11.5px;color:#fff;background:${isActive ? '#2f5233' : '#c62828'}">
                 <span class="status-dot ${isActive ? 'status-dot-on' : 'status-dot-off'}"></span>${isActive ? 'مفعَّل' : 'معطَّل'}
               </span>
             </td>
-            <td style="padding:8px;white-space:nowrap">
+            <td style="padding:8px;white-space:nowrap" data-label="إجراءات">
               <button type="button" class="${isActive ? 'btn-danger-outline' : ''}" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}">
                 ${isActive ? 'تعطيل' : 'تفعيل'}
               </button>
