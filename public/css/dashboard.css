@@ -16,7 +16,7 @@
   --shadow-2: 0 8px 24px rgba(0,0,0,.14);
 }
 
-body { background: var(--surface-variant); }
+body { background: var(--surface-variant); overflow-x: hidden; }
 
 .app-header {
   display: flex; align-items: center; gap: 12px;
@@ -56,7 +56,7 @@ body { background: var(--surface-variant); }
 .sidebar nav a:hover { background: rgba(47,82,51,.08); }
 .sidebar nav a.active { background: var(--primary); color: #fff; box-shadow: var(--shadow-1); }
 
-.main-content { flex: 1; padding: 22px; min-width: 0; }
+.main-content { flex: 1; padding: 22px; min-width: 0; overflow-x: hidden; }
 .content-fade-in { animation: content-fade-in .18s ease; }
 @keyframes content-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
@@ -132,6 +132,18 @@ body { background: var(--surface-variant); }
   background: #fff; user-select: none;
 }
 .checkbox-item input { width: auto !important; margin: 0; }
+
+/* 🆕 تمرير أفقي محتوى داخل الجدول نفسه فقط — يمنع سحب الصفحة كاملة يميناً بالجوال */
+.table-scroll-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll-wrap table { min-width: 500px; }
+
+/* 🆕 زر إظهار/إخفاء النموذج — بارز وواضح، بلون مختلف عن زر الحفظ الأساسي */
+.btn-toggle-form {
+  background: #fff; color: var(--primary); border: 2px solid var(--primary);
+  width: 100%; padding: 12px; border-radius: var(--radius); font-weight: 700;
+  font-size: 14.5px; cursor: pointer; margin-bottom: 16px;
+}
+.btn-toggle-form:hover { background: var(--surface-variant); }
 
 button {
   border: none; border-radius: 8px; background: var(--primary); color: #fff;
