@@ -198,7 +198,6 @@ function renderShell() {
   });
   document.querySelector('#bottomNav a[data-bottom-key="home"]')?.classList.add('active');
 
-  document.getElementById('logoutBtn').addEventListener('click', doLogout);
   document.getElementById('menuToggle').addEventListener('click', (e) => {
     e.stopPropagation();
     const sidebar = document.getElementById('sidebar');
