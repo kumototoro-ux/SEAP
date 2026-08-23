@@ -10,10 +10,10 @@ const APP = { token: null, user: null };
 
 /** 🆕 سجل الصفحات المركزي — أي صفحة قادمة (الموظفون، الطلاب...) تُضاف هنا فقط */
 const PAGE_REGISTRY = {
-  home: { label: '🏠 الرئيسية', render: renderHomeView },
-  employees: { label: '👩‍🏫 الموظفون', render: renderEmployeesView },
-  students: { label: '👨‍🎓 الطلاب', render: renderStudentsView },
-  users: { label: '🔐 المستخدمون', render: renderUsersView },
+  home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
+  employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
+  students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
+  users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
@@ -31,7 +31,8 @@ function renderLogin() {
   document.getElementById('app').innerHTML = `
     <div class="login-wrap">
       <div class="login-card">
-        <h2>منصة مِرقاة التعليمية</h2>
+        <div class="login-logo">${mirqatLogo(44)}</div>
+        <h2>مِرقاة</h2>
         <div class="field"><label>اسم المستخدم</label><input id="username" type="text"></div>
         <div class="field"><label>كلمة المرور</label><input id="password" type="password"></div>
         <button id="loginBtn">دخول</button>
@@ -117,27 +118,51 @@ function bootDashboard() {
   navigate(lastView && PAGE_REGISTRY[lastView] ? lastView : pagesForCurrentUser()[0]);
 }
 
+/** 🆕 شعار مِرقاة — مُبرمَج بالكامل (SVG)، سلّم متدرّج صاعد ينتهي بسهم (رمز الارتقاء) */
+function mirqatLogo(size) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <path d="M 15 85 L 15 65 L 35 65 L 35 45 L 55 45 L 55 25 L 72 25" fill="none" stroke="#202124" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M 57 17 L 76 25 L 68 43" fill="none" stroke="#202124" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="15" cy="85" r="7" fill="#DAF39F"/>
+  </svg>`;
+}
+
 function renderShell() {
   const initials = (APP.user.fullName || '؟').trim().charAt(0);
   document.getElementById('app').innerHTML = `
-    <div class="app-header">
-      <button class="menu-toggle-btn" id="menuToggle">☰</button>
-      <div class="app-header-title">منصة مِرقاة التعليمية</div>
-      <div class="header-user">
-        <span class="user-avatar">${initials}</span>
-        <span class="user-name">${escapeHtml(APP.user.fullName)}</span>
-        <button class="logout-btn-small" id="logoutBtn">خروج</button>
-      </div>
-    </div>
     <div class="app-body">
       <div class="sidebar-overlay" id="sidebarOverlay"></div>
-      <aside class="sidebar" id="sidebar"><nav id="sidebarNav"></nav></aside>
-      <main class="main-content" id="mainContent"></main>
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-brand">${mirqatLogo(30)}<span>مِرقاة</span></div>
+        <nav id="sidebarNav"></nav>
+      </aside>
+      <div class="app-main-col">
+        <div class="app-header">
+          <button class="menu-toggle-btn" id="menuToggle">${ICONS.menu()}</button>
+          <div class="header-search">
+            ${ICONS.search()}
+            <input type="text" placeholder="بحث..." disabled>
+            <span class="header-search-kbd">⌘K</span>
+          </div>
+          <div class="header-actions">
+            <button class="header-icon-btn" id="notifBtn">${ICONS.bell()}</button>
+            <div class="header-user" id="userMenuBtn">
+              <span class="user-avatar">${initials}</span>
+              <span class="user-name">${escapeHtml(APP.user.fullName)}</span>
+              ${ICONS.chevronDown()}
+              <div class="user-dropdown" id="userDropdown">
+                <button type="button" id="logoutBtn">${ICONS.logout()} تسجيل الخروج</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <main class="main-content" id="mainContent"></main>
+      </div>
     </div>`;
 
   const pages = pagesForCurrentUser();
   document.getElementById('sidebarNav').innerHTML = pages
-    .map((key) => `<a data-view="${key}">${PAGE_REGISTRY[key].label}</a>`)
+    .map((key) => `<a data-view="${key}">${ICONS[PAGE_REGISTRY[key].icon]()}<span>${PAGE_REGISTRY[key].label}</span></a>`)
     .join('');
 
   document.querySelectorAll('#sidebarNav a').forEach((a) => {
@@ -152,6 +177,13 @@ function renderShell() {
     document.getElementById('sidebarOverlay').classList.toggle('show', isOpen);
   });
   document.getElementById('sidebarOverlay').addEventListener('click', closeSidebarMobile);
+
+  // 🆕 قائمة المستخدم المنسدلة (بديل زر الخروج المنفصل — مطابق للتصميم المرجعي)
+  document.getElementById('userMenuBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    document.getElementById('userDropdown').classList.toggle('show');
+  });
+  document.addEventListener('click', () => { document.getElementById('userDropdown')?.classList.remove('show'); });
 }
 
 function closeSidebarMobile() {
@@ -180,7 +212,7 @@ function navigate(view) {
 function renderHomeView() {
   document.getElementById('mainContent').innerHTML = `
     <div class="card">
-      <h2>أهلاً، ${escapeHtml(APP.user.fullName)} 👋</h2>
+      <h2>أهلاً، ${escapeHtml(APP.user.fullName)}</h2>
       <p style="color:#666">${escapeHtml(APP.user.role)} — ${escapeHtml(APP.user.branch)}</p>
     </div>`;
 }
@@ -235,9 +267,9 @@ async function renderEmployeesView() {
   APP.allEmployees = [];
 
   main.innerHTML = `
-    <button type="button" class="btn-toggle-form" id="toggleEmpFormBtn">➕ إضافة موظف جديد</button>
+    <button type="button" class="btn-toggle-form" id="toggleEmpFormBtn">${ICONS.plus()} إضافة موظف جديد</button>
     <div class="card" id="empFormCard" style="display:none">
-      <h2 id="empFormTitle">➕ إضافة موظف جديد</h2>
+      <h2 id="empFormTitle">إضافة موظف جديد</h2>
       <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
       <form id="addEmpForm">
         <input type="hidden" id="emp_editId" value="">
@@ -261,15 +293,15 @@ async function renderEmployeesView() {
             <option value="role_branch_monitor">مراقب فروع</option>
           </select>
         </div>
-        <div class="filter-card-title">🏢 الفرع/الفروع * (يمكن اختيار أكثر من فرع)</div>
+        <div class="filter-card-title">الفرع/الفروع * (يمكن اختيار أكثر من فرع)</div>
         <div class="checkbox-list" id="emp_branchesBox">${branchCheckboxesHtml(settings.branches, [], 'emp')}</div>
 
         <div id="emp_teacherScopeBox" style="display:none">
-          <div class="filter-card-title">📚 نطاق المعلم — الصفوف</div>
+          <div class="filter-card-title">نطاق المعلم — الصفوف</div>
           <div class="checkbox-list" id="emp_gradesBox">${scopeCheckboxesHtml(settings.grades, [], 'emp-grade-cb')}</div>
-          <div class="filter-card-title">🏫 الشعب</div>
+          <div class="filter-card-title">الشعب</div>
           <div class="checkbox-list" id="emp_sectionsBox">${scopeCheckboxesHtml(settings.sections, [], 'emp-section-cb')}</div>
-          <div class="filter-card-title">📖 المواد</div>
+          <div class="filter-card-title">المواد</div>
           <div class="checkbox-list" id="emp_subjectsBox">${scopeCheckboxesHtml(settings.subjects, [], 'emp-subject-cb')}</div>
         </div>
 
@@ -280,11 +312,11 @@ async function renderEmployeesView() {
 
     <div class="card">
       <h3>قائمة الموظفين</h3>
-      <div class="field"><label>🔍 بحث بالاسم أو الدور أو الفرع</label><input id="empSearchInput" type="text"></div>
+      <div class="field"><label>بحث بالاسم أو الدور أو الفرع</label><input id="empSearchInput" type="text"></div>
       <div id="empListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
-  wireFormToggle('toggleEmpFormBtn', 'empFormCard', '➕ إضافة موظف جديد');
+  wireFormToggle('toggleEmpFormBtn', 'empFormCard', `${ICONS.plus()} إضافة موظف جديد`);
 
   document.getElementById('emp_role').addEventListener('change', (e) => {
     document.getElementById('emp_teacherScopeBox').style.display = e.target.value === 'role_teacher' ? 'block' : 'none';
@@ -312,17 +344,17 @@ function resetEmployeeForm() {
   document.getElementById('emp_nationalIdField').style.display = 'block';
   document.getElementById('emp_nationalId').required = true; // 🆕 يُعاد إجباره عند وضع الإضافة
   document.getElementById('emp_teacherScopeBox').style.display = 'none';
-  document.getElementById('empFormTitle').textContent = '➕ إضافة موظف جديد';
+  document.getElementById('empFormTitle').textContent = 'إضافة موظف جديد';
   document.getElementById('addEmpBtn').textContent = 'إضافة الموظف';
   document.getElementById('cancelEditBtn').style.display = 'none';
   document.querySelectorAll('.emp-branch-cb, .emp-grade-cb, .emp-section-cb, .emp-subject-cb').forEach((cb) => { cb.checked = false; });
   document.getElementById('empFormCard').style.display = 'none'; // 🆕 يُخفى النموذج تلقائياً بعد الحفظ/الإلغاء
-  document.getElementById('toggleEmpFormBtn').textContent = '➕ إضافة موظف جديد';
+  document.getElementById('toggleEmpFormBtn').innerHTML = `${ICONS.plus()} إضافة موظف جديد`;
 }
 
 function startEditEmployee(emp) {
   document.getElementById('empFormCard').style.display = 'block'; // 🆕 يُظهر النموذج تلقائياً عند التعديل
-  document.getElementById('toggleEmpFormBtn').textContent = '✖️ إغلاق النموذج';
+  document.getElementById('toggleEmpFormBtn').innerHTML = `${ICONS.close()} إغلاق النموذج`;
   document.getElementById('emp_editId').value = emp.id;
   document.getElementById('emp_nameAr').value = emp.name_ar;
   document.getElementById('emp_nameEn').value = emp.name_en || '';
@@ -337,7 +369,7 @@ function startEditEmployee(emp) {
   document.querySelectorAll('.emp-section-cb').forEach((cb) => { cb.checked = (emp.sections || []).includes(cb.value); });
   document.querySelectorAll('.emp-subject-cb').forEach((cb) => { cb.checked = (emp.subjects || []).includes(cb.value); });
 
-  document.getElementById('empFormTitle').textContent = '✏️ تعديل بيانات: ' + emp.name_ar;
+  document.getElementById('empFormTitle').textContent = 'تعديل بيانات: ' + emp.name_ar;
   document.getElementById('addEmpBtn').textContent = 'حفظ التعديلات';
   document.getElementById('cancelEditBtn').style.display = 'inline-block';
   document.getElementById('empFormCard').scrollIntoView({ behavior: 'smooth' });
@@ -420,20 +452,20 @@ function renderEmployeesTable() {
             <td style="padding:8px">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</td>
             <td style="padding:8px">${escapeHtml(e.all_branches.join('، '))}</td>
             <td style="padding:8px;white-space:nowrap">
-              <button type="button" class="btn-edit-emp" data-id="${escapeHtml(e.id)}">✏️</button>
-              <button type="button" class="btn-del-emp" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.name_ar)}" style="background:#c62828">🗑️</button>
+              <button type="button" class="btn-icon-edit" data-id="${escapeHtml(e.id)}">${ICONS.edit()}</button>
+              <button type="button" class="btn-icon-delete" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.name_ar)}">${ICONS.trash()}</button>
             </td>
           </tr>`).join('')}
       </tbody>
     </table></div>`;
 
-  area.querySelectorAll('.btn-edit-emp').forEach((btn) => {
+  area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
     btn.addEventListener('click', () => {
       const emp = APP.allEmployees.find((e) => e.id === btn.getAttribute('data-id'));
       if (emp) startEditEmployee(emp);
     });
   });
-  area.querySelectorAll('.btn-del-emp').forEach((btn) => {
+  area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const name = btn.getAttribute('data-name');
       if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
@@ -458,9 +490,9 @@ async function renderStudentsView() {
   APP.allStudents = [];
 
   main.innerHTML = `
-    <button type="button" class="btn-toggle-form" id="toggleStuFormBtn">➕ تسجيل طالب جديد</button>
+    <button type="button" class="btn-toggle-form" id="toggleStuFormBtn">${ICONS.plus()} تسجيل طالب جديد</button>
     <div class="card" id="stuFormCard" style="display:none">
-      <h2 id="stuFormTitle">➕ تسجيل طالب جديد</h2>
+      <h2 id="stuFormTitle">تسجيل طالب جديد</h2>
       <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
       <form id="addStuForm">
         <input type="hidden" id="stu_editId" value="">
@@ -496,7 +528,7 @@ async function renderStudentsView() {
             ${settings.sections.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
           </select>
         </div>
-        <div class="filter-card-title">📖 المواد الدراسية</div>
+        <div class="filter-card-title">المواد الدراسية</div>
         <div class="checkbox-list" id="stu_subjectsBox">${scopeCheckboxesHtml(settings.subjects, [], 'stu-subject-cb')}</div>
 
         <button type="submit" id="addStuBtn" style="margin-top:14px">تسجيل الطالب</button>
@@ -506,11 +538,11 @@ async function renderStudentsView() {
 
     <div class="card">
       <h3>قائمة الطلاب</h3>
-      <div class="field"><label>🔍 بحث بالاسم أو الصف أو الشعبة</label><input id="stuSearchInput" type="text"></div>
+      <div class="field"><label>بحث بالاسم أو الصف أو الشعبة</label><input id="stuSearchInput" type="text"></div>
       <div id="stuListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
-  wireFormToggle('toggleStuFormBtn', 'stuFormCard', '➕ تسجيل طالب جديد');
+  wireFormToggle('toggleStuFormBtn', 'stuFormCard', `${ICONS.plus()} تسجيل طالب جديد`);
 
   document.getElementById('stu_nameAr').addEventListener('blur', () => {
     const enField = document.getElementById('stu_nameEn');
@@ -529,17 +561,17 @@ function resetStudentForm() {
   document.getElementById('stu_editId').value = '';
   document.getElementById('stu_nationalIdField').style.display = 'block';
   document.getElementById('stu_nationalId').required = true;
-  document.getElementById('stuFormTitle').textContent = '➕ تسجيل طالب جديد';
+  document.getElementById('stuFormTitle').textContent = 'تسجيل طالب جديد';
   document.getElementById('addStuBtn').textContent = 'تسجيل الطالب';
   document.getElementById('cancelStuEditBtn').style.display = 'none';
   document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = false; });
   document.getElementById('stuFormCard').style.display = 'none'; // 🆕 يُخفى النموذج تلقائياً بعد الحفظ/الإلغاء
-  document.getElementById('toggleStuFormBtn').textContent = '➕ تسجيل طالب جديد';
+  document.getElementById('toggleStuFormBtn').innerHTML = `${ICONS.plus()} تسجيل طالب جديد`;
 }
 
 function startEditStudent(stu) {
   document.getElementById('stuFormCard').style.display = 'block'; // 🆕 يُظهر النموذج تلقائياً عند التعديل
-  document.getElementById('toggleStuFormBtn').textContent = '✖️ إغلاق النموذج';
+  document.getElementById('toggleStuFormBtn').innerHTML = `${ICONS.close()} إغلاق النموذج`;
   document.getElementById('stu_editId').value = stu.id;
   document.getElementById('stu_nameAr').value = stu.name_ar;
   document.getElementById('stu_nameEn').value = stu.name_en || '';
@@ -554,7 +586,7 @@ function startEditStudent(stu) {
   document.getElementById('stu_section').value = stu.section;
   document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = (stu.subjects || []).includes(cb.value); });
 
-  document.getElementById('stuFormTitle').textContent = '✏️ تعديل بيانات: ' + stu.name_ar;
+  document.getElementById('stuFormTitle').textContent = 'تعديل بيانات: ' + stu.name_ar;
   document.getElementById('addStuBtn').textContent = 'حفظ التعديلات';
   document.getElementById('cancelStuEditBtn').style.display = 'inline-block';
   document.getElementById('stuFormCard').scrollIntoView({ behavior: 'smooth' });
@@ -630,20 +662,20 @@ function renderStudentsTable() {
             <td style="padding:8px">${escapeHtml(s.section)}</td>
             <td style="padding:8px">${escapeHtml(s.branch)}</td>
             <td style="padding:8px;white-space:nowrap">
-              <button type="button" class="btn-edit-stu" data-id="${escapeHtml(s.id)}">✏️</button>
-              <button type="button" class="btn-del-stu" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name_ar)}" style="background:#c62828">🗑️</button>
+              <button type="button" class="btn-icon-edit" data-id="${escapeHtml(s.id)}">${ICONS.edit()}</button>
+              <button type="button" class="btn-icon-delete" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name_ar)}">${ICONS.trash()}</button>
             </td>
           </tr>`).join('')}
       </tbody>
     </table></div>`;
 
-  area.querySelectorAll('.btn-edit-stu').forEach((btn) => {
+  area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
     btn.addEventListener('click', () => {
       const stu = APP.allStudents.find((s) => s.id === btn.getAttribute('data-id'));
       if (stu) startEditStudent(stu);
     });
   });
-  area.querySelectorAll('.btn-del-stu').forEach((btn) => {
+  area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const name = btn.getAttribute('data-name');
       if (!confirm(`تأكيد حذف الطالب "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
@@ -664,8 +696,8 @@ async function renderUsersView() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="card">
-      <h2>🔐 حسابات الموظفين</h2>
-      <div class="field"><label>🔍 بحث بالاسم أو اسم المستخدم</label><input id="userSearchInput" type="text"></div>
+      <h2>حسابات الموظفين</h2>
+      <div class="field"><label>بحث بالاسم أو اسم المستخدم</label><input id="userSearchInput" type="text"></div>
       <div id="usersListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
@@ -706,21 +738,21 @@ function renderUsersTable() {
             <td style="padding:8px">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role || '—')}</td>
             <td style="padding:8px">
               <span style="padding:3px 10px;border-radius:999px;font-size:11.5px;color:#fff;background:${isActive ? '#2f5233' : '#c62828'}">
-                ${isActive ? '🟢 مفعَّل' : '🔴 معطَّل'}
+                <span class="status-dot ${isActive ? 'status-dot-on' : 'status-dot-off'}"></span>${isActive ? 'مفعَّل' : 'معطَّل'}
               </span>
             </td>
             <td style="padding:8px;white-space:nowrap">
-              <button type="button" class="btn-toggle-user" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}" style="background:${isActive ? '#c62828' : '#2f5233'}">
+              <button type="button" class="${isActive ? 'btn-danger-outline' : ''}" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}">
                 ${isActive ? 'تعطيل' : 'تفعيل'}
               </button>
-              <button type="button" class="btn-reset-pass" data-id="${escapeHtml(u.id)}" data-name="${escapeHtml(u.nameAr)}" style="background:#888">🔑 إعادة تعيين</button>
+              <button type="button" class="btn-reset-pass" data-id="${escapeHtml(u.id)}" data-name="${escapeHtml(u.nameAr)}" class="btn-outline-sm">${ICONS.key()} إعادة تعيين</button>
             </td>
           </tr>`;
         }).join('')}
       </tbody>
     </table></div>`;
 
-  area.querySelectorAll('.btn-toggle-user').forEach((btn) => {
+  area.querySelectorAll('[data-new-status]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const newStatus = btn.getAttribute('data-new-status');
       if (!confirm(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
@@ -761,7 +793,7 @@ function wireFormToggle(toggleBtnId, formCardId, defaultLabel) {
   btn.addEventListener('click', () => {
     const isHidden = card.style.display === 'none';
     card.style.display = isHidden ? 'block' : 'none';
-    btn.textContent = isHidden ? '✖️ إغلاق النموذج' : defaultLabel;
+    btn.innerHTML = isHidden ? `${ICONS.close()} إغلاق النموذج` : defaultLabel;
     if (isHidden) card.scrollIntoView({ behavior: 'smooth' });
   });
 }
