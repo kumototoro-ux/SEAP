@@ -13,12 +13,13 @@ const PAGE_REGISTRY = {
   home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
   employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
+  parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
   users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'users'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'users'],
 };
 
 function pagesForCurrentUser() {
@@ -914,6 +915,255 @@ function renderUsersTable() {
       try {
         const result = await apiCall('users', { method: 'POST', body: { action: 'resetPassword', id: btn.getAttribute('data-id') } });
         showToast('تمت إعادة التعيين — كلمة المرور الجديدة: ' + result.tempPassword, 'success');
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+}
+
+/* ===================== صفحة أولياء الأمور ===================== */
+
+let selectedParentStudentIds = [];
+
+async function renderParentsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  const settings = await getSettingsOnce();
+  if (!APP.allStudents || !APP.allStudents.length) {
+    APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+  }
+  APP.allParents = [];
+  selectedParentStudentIds = [];
+
+  main.innerHTML = `
+    <button type="button" class="btn-toggle-form" id="toggleParentFormBtn">${ICONS.plus()} تسجيل ولي أمر جديد</button>
+    <div class="card" id="parentFormCard" style="display:none">
+      <h2 id="parentFormTitle">تسجيل ولي أمر جديد</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
+      <form id="addParentForm">
+        <input type="hidden" id="parent_editId" value="">
+        <div class="field"><label>الاسم بالعربي *</label><input id="parent_nameAr" type="text" required></div>
+        <div class="field"><label>الاسم بالإنجليزي * <span style="font-weight:400;color:#888;font-size:11.5px">(تحويل تقريبي تلقائي)</span></label><input id="parent_nameEn" type="text" required></div>
+        <div class="field" id="parent_nationalIdField"><label>رقم الهوية/الإقامة/الجواز *</label><input id="parent_nationalId" type="text" maxlength="20" required></div>
+        <div class="field"><label>رقم الجوال *</label><input id="parent_phone" type="tel" required></div>
+        <div class="field"><label>الفرع *</label>
+          <select id="parent_branch" required><option value="" disabled selected>-- اختر --</option>
+            ${settings.branches.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>صلة القرابة *</label>
+          <select id="parent_relationship" required>
+            <option value="" disabled selected>-- اختر --</option>
+            <option value="أب">أب</option>
+            <option value="أم">أم</option>
+            <option value="ولي أمر آخر">ولي أمر آخر</option>
+          </select>
+        </div>
+
+        <div class="filter-card-title">ربط بالطالب/الطلاب * (ابحث بالاسم واضغط لإضافة)</div>
+        <input type="text" id="parentStudentSearch" placeholder="اكتب اسم الطالب للبحث..." style="margin-bottom:8px">
+        <div id="parentStudentSearchResults" class="checkbox-list"></div>
+        <div class="filter-card-title">الطلاب المرتبطون حالياً</div>
+        <div id="parentSelectedStudents" class="checkbox-list"><span style="color:#aaa;font-size:12px">لا يوجد طالب مُختار بعد</span></div>
+
+        <button type="submit" id="addParentBtn" style="margin-top:14px">تسجيل ولي الأمر</button>
+        <button type="button" id="cancelParentEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>قائمة أولياء الأمور</h3>
+      <div class="field"><label>بحث بالاسم أو رقم الجوال</label><input id="parentSearchInput" type="text"></div>
+      <div id="parentsListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  wireFormToggle('toggleParentFormBtn', 'parentFormCard', `${ICONS.plus()} تسجيل ولي أمر جديد`);
+
+  document.getElementById('parent_nameAr').addEventListener('blur', () => {
+    const enField = document.getElementById('parent_nameEn');
+    if (!enField.value.trim()) enField.value = transliterateArabicToEnglish(document.getElementById('parent_nameAr').value);
+  });
+
+  document.getElementById('parentStudentSearch').addEventListener('input', renderParentStudentSearchResults);
+  document.getElementById('addParentForm').addEventListener('submit', saveParentHandler);
+  document.getElementById('cancelParentEditBtn').addEventListener('click', resetParentForm);
+  document.getElementById('parentSearchInput').addEventListener('input', renderParentsTable);
+
+  loadParentsList();
+}
+
+function renderParentStudentSearchResults() {
+  const q = (document.getElementById('parentStudentSearch').value || '').trim().toLowerCase();
+  const box = document.getElementById('parentStudentSearchResults');
+  if (!q) { box.innerHTML = ''; return; }
+  const matches = APP.allStudents.filter((s) => s.name_ar.toLowerCase().includes(q) && !selectedParentStudentIds.includes(s.id)).slice(0, 8);
+  box.innerHTML = matches.map((s) => `
+    <span class="checkbox-item" data-add-student="${escapeHtml(s.id)}" style="cursor:pointer">+ ${escapeHtml(s.name_ar)} <span style="color:#aaa">(${escapeHtml(s.grade)})</span></span>
+  `).join('') || '<span style="color:#aaa;font-size:12px">لا نتائج</span>';
+
+  box.querySelectorAll('[data-add-student]').forEach((el) => {
+    el.addEventListener('click', () => {
+      selectedParentStudentIds.push(el.getAttribute('data-add-student'));
+      document.getElementById('parentStudentSearch').value = '';
+      box.innerHTML = '';
+      renderSelectedParentStudents();
+    });
+  });
+}
+
+function renderSelectedParentStudents() {
+  const box = document.getElementById('parentSelectedStudents');
+  if (!selectedParentStudentIds.length) { box.innerHTML = '<span style="color:#aaa;font-size:12px">لا يوجد طالب مُختار بعد</span>'; return; }
+  box.innerHTML = selectedParentStudentIds.map((sid) => {
+    const stu = APP.allStudents.find((s) => s.id === sid);
+    return `<span class="checkbox-item">${escapeHtml(stu ? stu.name_ar : sid)} <span data-remove-student="${escapeHtml(sid)}" style="cursor:pointer;color:#c62828;margin-right:4px">✕</span></span>`;
+  }).join('');
+  box.querySelectorAll('[data-remove-student]').forEach((el) => {
+    el.addEventListener('click', () => {
+      selectedParentStudentIds = selectedParentStudentIds.filter((id) => id !== el.getAttribute('data-remove-student'));
+      renderSelectedParentStudents();
+    });
+  });
+}
+
+function resetParentForm() {
+  document.getElementById('addParentForm').reset();
+  document.getElementById('parent_editId').value = '';
+  document.getElementById('parent_nationalIdField').style.display = 'block';
+  document.getElementById('parent_nationalId').required = true;
+  document.getElementById('parentFormTitle').textContent = 'تسجيل ولي أمر جديد';
+  document.getElementById('addParentBtn').textContent = 'تسجيل ولي الأمر';
+  document.getElementById('cancelParentEditBtn').style.display = 'none';
+  selectedParentStudentIds = [];
+  renderSelectedParentStudents();
+  document.getElementById('parentFormCard').style.display = 'none';
+  document.getElementById('toggleParentFormBtn').innerHTML = `${ICONS.plus()} تسجيل ولي أمر جديد`;
+}
+
+function startEditParent(parent) {
+  document.getElementById('parentFormCard').style.display = 'block';
+  document.getElementById('toggleParentFormBtn').innerHTML = `${ICONS.close()} إغلاق النموذج`;
+  document.getElementById('parent_editId').value = parent.id;
+  document.getElementById('parent_nameAr').value = parent.name_ar;
+  document.getElementById('parent_nameEn').value = parent.name_en || '';
+  document.getElementById('parent_nationalIdField').style.display = 'none';
+  document.getElementById('parent_nationalId').required = false;
+  document.getElementById('parent_phone').value = parent.phone || '';
+  document.getElementById('parent_branch').value = parent.branch;
+  document.getElementById('parent_relationship').value = (parent.linked_students[0] && parent.linked_students[0].relationship) || '';
+  selectedParentStudentIds = parent.linked_students.map((l) => l.id).filter(Boolean);
+  renderSelectedParentStudents();
+
+  document.getElementById('parentFormTitle').textContent = 'تعديل بيانات: ' + parent.name_ar;
+  document.getElementById('addParentBtn').textContent = 'حفظ التعديلات';
+  document.getElementById('cancelParentEditBtn').style.display = 'inline-block';
+  document.getElementById('parentFormCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveParentHandler(e) {
+  e.preventDefault();
+  const editId = document.getElementById('parent_editId').value;
+  const btn = document.getElementById('addParentBtn');
+
+  if (!selectedParentStudentIds.length) { showToast('اربط ولي الأمر بطالب واحد على الأقل', 'error'); return; }
+
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+  const body = {
+    nameAr: document.getElementById('parent_nameAr').value.trim(),
+    nameEn: document.getElementById('parent_nameEn').value.trim(),
+    phone: document.getElementById('parent_phone').value.trim(),
+    branch: document.getElementById('parent_branch').value,
+    relationship: document.getElementById('parent_relationship').value,
+    studentIds: selectedParentStudentIds,
+  };
+  if (!editId) body.nationalId = document.getElementById('parent_nationalId').value.trim();
+
+  try {
+    if (editId) {
+      await apiCall('parents', { method: 'POST', body: { action: 'update', id: editId, ...body } });
+      showToast('تم تحديث بيانات ولي الأمر بنجاح', 'success');
+    } else {
+      await apiCall('parents', { method: 'POST', body: { action: 'add', ...body } });
+      showToast('تم تسجيل ولي الأمر بنجاح — حساب دخوله جاهز أيضاً', 'success');
+    }
+    resetParentForm();
+    loadParentsList();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'تسجيل ولي الأمر';
+  }
+}
+
+async function loadParentsList() {
+  const area = document.getElementById('parentsListArea');
+  try {
+    APP.allParents = await apiCall('parents', { method: 'POST', body: { action: 'list' } });
+    renderParentsTable();
+  } catch (e) {
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderParentsTable() {
+  const area = document.getElementById('parentsListArea');
+  const q = (document.getElementById('parentSearchInput').value || '').trim().toLowerCase();
+  const list = APP.allParents.filter((p) => !q || p.name_ar.toLowerCase().includes(q) || (p.phone || '').includes(q));
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد أولياء أمور مطابقون</p>'; return; }
+
+  area.innerHTML = `<div class="person-card-grid">${list.map((p) => `
+    <div class="person-card" data-id="${escapeHtml(p.id)}" data-card-clickable>
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((p.name_ar || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(p.name_ar)}</div>
+          <div class="person-card-role">${escapeHtml(p.phone || '')}</div>
+        </div>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>الأبناء</span><span>${escapeHtml(p.linked_students.map((l) => l.name_ar).join('، ') || '—')}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-icon-edit" data-id="${escapeHtml(p.id)}">${ICONS.edit()}</button>
+          <button type="button" class="btn-icon-delete" data-id="${escapeHtml(p.id)}" data-name="${escapeHtml(p.name_ar)}">${ICONS.trash()}</button>
+        </div>
+      </div>
+    </div>`).join('')}</div>`;
+
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const p = APP.allParents.find((x) => x.id === card.getAttribute('data-id'));
+      if (!p) return;
+      showDetailModal(p.name_ar, p.phone, [
+        { label: 'الاسم بالإنجليزي', value: p.name_en },
+        { label: 'رقم الهوية/الإقامة', value: p.national_id },
+        { label: 'رقم الجوال', value: p.phone },
+        { label: 'الفرع', value: p.branch },
+        { label: 'الأبناء المرتبطون', value: p.linked_students.map((l) => `${l.name_ar} (${l.relationship || '—'})`).join('، ') },
+      ]);
+    });
+  });
+
+  area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
+      const p = APP.allParents.find((x) => x.id === btn.getAttribute('data-id'));
+      if (p) startEditParent(p);
+    });
+  });
+  area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`تأكيد حذف ولي الأمر "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
+      try {
+        await apiCall('parents', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
+        showToast('تم الحذف بنجاح', 'success');
+        loadParentsList();
       } catch (e) {
         showToast(e.message, 'error');
       }
