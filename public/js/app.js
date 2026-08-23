@@ -235,7 +235,8 @@ async function renderEmployeesView() {
   APP.allEmployees = [];
 
   main.innerHTML = `
-    <div class="card" id="empFormCard">
+    <button type="button" class="btn-toggle-form" id="toggleEmpFormBtn">➕ إضافة موظف جديد</button>
+    <div class="card" id="empFormCard" style="display:none">
       <h2 id="empFormTitle">➕ إضافة موظف جديد</h2>
       <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
       <form id="addEmpForm">
@@ -283,6 +284,8 @@ async function renderEmployeesView() {
       <div id="empListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
+  wireFormToggle('toggleEmpFormBtn', 'empFormCard', '➕ إضافة موظف جديد');
+
   document.getElementById('emp_role').addEventListener('change', (e) => {
     document.getElementById('emp_teacherScopeBox').style.display = e.target.value === 'role_teacher' ? 'block' : 'none';
   });
@@ -313,9 +316,13 @@ function resetEmployeeForm() {
   document.getElementById('addEmpBtn').textContent = 'إضافة الموظف';
   document.getElementById('cancelEditBtn').style.display = 'none';
   document.querySelectorAll('.emp-branch-cb, .emp-grade-cb, .emp-section-cb, .emp-subject-cb').forEach((cb) => { cb.checked = false; });
+  document.getElementById('empFormCard').style.display = 'none'; // 🆕 يُخفى النموذج تلقائياً بعد الحفظ/الإلغاء
+  document.getElementById('toggleEmpFormBtn').textContent = '➕ إضافة موظف جديد';
 }
 
 function startEditEmployee(emp) {
+  document.getElementById('empFormCard').style.display = 'block'; // 🆕 يُظهر النموذج تلقائياً عند التعديل
+  document.getElementById('toggleEmpFormBtn').textContent = '✖️ إغلاق النموذج';
   document.getElementById('emp_editId').value = emp.id;
   document.getElementById('emp_nameAr').value = emp.name_ar;
   document.getElementById('emp_nameEn').value = emp.name_en || '';
@@ -402,7 +409,7 @@ function renderEmployeesTable() {
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفون مطابقون</p>'; return; }
 
   area.innerHTML = `
-    <table style="width:100%;border-collapse:collapse">
+    <div class="table-scroll-wrap"><table style="width:100%;border-collapse:collapse">
       <thead><tr style="text-align:right;border-bottom:2px solid #eee">
         <th style="padding:8px">الاسم</th><th style="padding:8px">الدور</th><th style="padding:8px">الفروع</th><th style="padding:8px"></th>
       </tr></thead>
@@ -418,7 +425,7 @@ function renderEmployeesTable() {
             </td>
           </tr>`).join('')}
       </tbody>
-    </table>`;
+    </table></div>`;
 
   area.querySelectorAll('.btn-edit-emp').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -451,7 +458,8 @@ async function renderStudentsView() {
   APP.allStudents = [];
 
   main.innerHTML = `
-    <div class="card" id="stuFormCard">
+    <button type="button" class="btn-toggle-form" id="toggleStuFormBtn">➕ تسجيل طالب جديد</button>
+    <div class="card" id="stuFormCard" style="display:none">
       <h2 id="stuFormTitle">➕ تسجيل طالب جديد</h2>
       <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
       <form id="addStuForm">
@@ -502,6 +510,8 @@ async function renderStudentsView() {
       <div id="stuListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
+  wireFormToggle('toggleStuFormBtn', 'stuFormCard', '➕ تسجيل طالب جديد');
+
   document.getElementById('stu_nameAr').addEventListener('blur', () => {
     const enField = document.getElementById('stu_nameEn');
     if (!enField.value.trim()) enField.value = transliterateArabicToEnglish(document.getElementById('stu_nameAr').value);
@@ -523,9 +533,13 @@ function resetStudentForm() {
   document.getElementById('addStuBtn').textContent = 'تسجيل الطالب';
   document.getElementById('cancelStuEditBtn').style.display = 'none';
   document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = false; });
+  document.getElementById('stuFormCard').style.display = 'none'; // 🆕 يُخفى النموذج تلقائياً بعد الحفظ/الإلغاء
+  document.getElementById('toggleStuFormBtn').textContent = '➕ تسجيل طالب جديد';
 }
 
 function startEditStudent(stu) {
+  document.getElementById('stuFormCard').style.display = 'block'; // 🆕 يُظهر النموذج تلقائياً عند التعديل
+  document.getElementById('toggleStuFormBtn').textContent = '✖️ إغلاق النموذج';
   document.getElementById('stu_editId').value = stu.id;
   document.getElementById('stu_nameAr').value = stu.name_ar;
   document.getElementById('stu_nameEn').value = stu.name_en || '';
@@ -604,7 +618,7 @@ function renderStudentsTable() {
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
 
   area.innerHTML = `
-    <table style="width:100%;border-collapse:collapse">
+    <div class="table-scroll-wrap"><table style="width:100%;border-collapse:collapse">
       <thead><tr style="text-align:right;border-bottom:2px solid #eee">
         <th style="padding:8px">الاسم</th><th style="padding:8px">الصف</th><th style="padding:8px">الشعبة</th><th style="padding:8px">الفرع</th><th style="padding:8px"></th>
       </tr></thead>
@@ -621,7 +635,7 @@ function renderStudentsTable() {
             </td>
           </tr>`).join('')}
       </tbody>
-    </table>`;
+    </table></div>`;
 
   area.querySelectorAll('.btn-edit-stu').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -677,7 +691,7 @@ function renderUsersTable() {
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد حسابات مطابقة</p>'; return; }
 
   area.innerHTML = `
-    <table style="width:100%;border-collapse:collapse">
+    <div class="table-scroll-wrap"><table style="width:100%;border-collapse:collapse">
       <thead><tr style="text-align:right;border-bottom:2px solid #eee">
         <th style="padding:8px">الاسم</th><th style="padding:8px">اسم المستخدم</th><th style="padding:8px">الدور</th>
         <th style="padding:8px">الحالة</th><th style="padding:8px"></th>
@@ -704,7 +718,7 @@ function renderUsersTable() {
           </tr>`;
         }).join('')}
       </tbody>
-    </table>`;
+    </table></div>`;
 
   area.querySelectorAll('.btn-toggle-user').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -735,6 +749,22 @@ function renderUsersTable() {
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
+
+/**
+ * 🆕 زر إظهار/إخفاء عام لأي نموذج بأي صفحة — يُستخدَم بصفحة الموظفين
+ * والطلاب حالياً، وأي صفحة قادمة (حضور، درجات...) بنفس السطر الواحد.
+ * النموذج مخفي افتراضياً؛ يظهر عند الضغط، ويُخفى تلقائياً عند الحفظ الناجح.
+ */
+function wireFormToggle(toggleBtnId, formCardId, defaultLabel) {
+  const btn = document.getElementById(toggleBtnId);
+  const card = document.getElementById(formCardId);
+  btn.addEventListener('click', () => {
+    const isHidden = card.style.display === 'none';
+    card.style.display = isHidden ? 'block' : 'none';
+    btn.textContent = isHidden ? '✖️ إغلاق النموذج' : defaultLabel;
+    if (isHidden) card.scrollIntoView({ behavior: 'smooth' });
+  });
+}
 
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
