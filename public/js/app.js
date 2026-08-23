@@ -51,7 +51,7 @@ async function doLogin() {
 
   btn.disabled = true; btn.textContent = 'جارِ الدخول...';
   try {
-    const data = await apiCall('login', { method: 'POST', body: { username, password }, requiresAuth: false });
+    const data = await apiCall('auth', { method: 'POST', body: { action: 'login', username, password }, requiresAuth: false });
     APP.token = data.token;
     APP.user = data.user;
 
@@ -88,7 +88,7 @@ function renderForceChangePassword() {
 
     btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
     try {
-      await apiCall('force-set-password', { method: 'POST', body: { newPassword } });
+      await apiCall('auth', { method: 'POST', body: { action: 'forceSetPassword', newPassword } });
       localStorage.setItem('mirqat_token', APP.token);
       localStorage.setItem('mirqat_user', JSON.stringify(APP.user));
       showToast('تم تعيين كلمة المرور بنجاح', 'success');
@@ -101,7 +101,7 @@ function renderForceChangePassword() {
 }
 
 async function doLogout() {
-  try { await apiCall('logout', { method: 'POST' }); } catch (e) { /* لا يهم فشل الطلب، نمسح محلياً بأي حال */ }
+  try { await apiCall('auth', { method: 'POST', body: { action: 'logout' } }); } catch (e) { /* لا يهم فشل الطلب، نمسح محلياً بأي حال */ }
   localStorage.removeItem('mirqat_token');
   localStorage.removeItem('mirqat_user');
   APP.token = null; APP.user = null;
@@ -189,7 +189,7 @@ function renderHomeView() {
 let cachedSettings = null;
 
 async function getSettingsOnce() {
-  if (!cachedSettings) cachedSettings = await apiCall('get-settings', { requiresAuth: false });
+  if (!cachedSettings) cachedSettings = await apiCall('settings', { method: 'POST', body: { action: 'get' }, requiresAuth: false });
   return cachedSettings;
 }
 
@@ -358,10 +358,10 @@ async function saveEmployeeHandler(e) {
 
   try {
     if (editId) {
-      await apiCall('update-employee', { method: 'POST', body: { id: editId, ...body } });
+      await apiCall('employees', { method: 'POST', body: { action: 'update', id: editId, ...body } });
       showToast('تم تحديث بيانات الموظف بنجاح', 'success');
     } else {
-      await apiCall('add-employee', { method: 'POST', body });
+      await apiCall('employees', { method: 'POST', body: { action: 'add', ...body } });
       showToast('تم إضافة الموظف بنجاح — كلمة المرور المبدئية هي رقم الهوية', 'success');
     }
     resetEmployeeForm();
@@ -376,7 +376,7 @@ async function saveEmployeeHandler(e) {
 async function loadEmployeesList() {
   const area = document.getElementById('empListArea');
   try {
-    APP.allEmployees = await apiCall('list-employees', { method: 'GET' });
+    APP.allEmployees = await apiCall('employees', { method: 'POST', body: { action: 'list' } });
     renderEmployeesTable();
   } catch (e) {
     area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
@@ -430,7 +430,7 @@ function renderEmployeesTable() {
       const name = btn.getAttribute('data-name');
       if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
       try {
-        await apiCall('delete-employee', { method: 'POST', body: { id: btn.getAttribute('data-id') } });
+        await apiCall('employees', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
         showToast('تم الحذف بنجاح', 'success');
         loadEmployeesList();
       } catch (e) {
@@ -458,7 +458,7 @@ async function renderUsersView() {
 async function loadUsersList() {
   const area = document.getElementById('usersListArea');
   try {
-    APP.allUsers = await apiCall('list-users', { method: 'GET' });
+    APP.allUsers = await apiCall('users', { method: 'POST', body: { action: 'list' } });
     renderUsersTable();
   } catch (e) {
     area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
@@ -507,7 +507,7 @@ function renderUsersTable() {
       const newStatus = btn.getAttribute('data-new-status');
       if (!confirm(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
       try {
-        await apiCall('toggle-user-status', { method: 'POST', body: { id: btn.getAttribute('data-id'), newStatus } });
+        await apiCall('users', { method: 'POST', body: { action: 'toggleStatus', id: btn.getAttribute('data-id'), newStatus } });
         showToast(newStatus === 'active' ? 'تم التفعيل' : 'تم التعطيل', 'success');
         loadUsersList();
       } catch (e) {
@@ -521,7 +521,7 @@ function renderUsersTable() {
       const name = btn.getAttribute('data-name');
       if (!confirm(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`)) return;
       try {
-        const result = await apiCall('reset-user-password', { method: 'POST', body: { id: btn.getAttribute('data-id') } });
+        const result = await apiCall('users', { method: 'POST', body: { action: 'resetPassword', id: btn.getAttribute('data-id') } });
         showToast('تمت إعادة التعيين — كلمة المرور الجديدة: ' + result.tempPassword, 'success');
       } catch (e) {
         showToast(e.message, 'error');
