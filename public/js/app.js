@@ -464,24 +464,25 @@ function renderEmployeesTable() {
 
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفون مطابقون</p>'; return; }
 
-  area.innerHTML = `
-    <div class="table-scroll-wrap"><table style="width:100%;border-collapse:collapse">
-      <thead><tr style="text-align:right;border-bottom:2px solid #eee">
-        <th style="padding:8px">الاسم</th><th style="padding:8px">الدور</th><th style="padding:8px">الفروع</th><th style="padding:8px"></th>
-      </tr></thead>
-      <tbody>
-        ${list.map((e) => `
-          <tr style="border-bottom:1px solid #f0f0f0">
-            <td style="padding:8px" data-label="الاسم">${escapeHtml(e.name_ar)}</td>
-            <td style="padding:8px" data-label="الدور">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</td>
-            <td style="padding:8px" data-label="الفروع">${escapeHtml(e.all_branches.join('، '))}</td>
-            <td style="padding:8px;white-space:nowrap" data-label="إجراءات">
-              <button type="button" class="btn-icon-edit" data-id="${escapeHtml(e.id)}">${ICONS.edit()}</button>
-              <button type="button" class="btn-icon-delete" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.name_ar)}">${ICONS.trash()}</button>
-            </td>
-          </tr>`).join('')}
-      </tbody>
-    </table></div>`;
+  area.innerHTML = `<div class="person-card-grid">${list.map((e) => `
+    <div class="person-card">
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((e.name_ar || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(e.name_ar)}</div>
+          <div class="person-card-role">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</div>
+        </div>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>الفروع</span><span>${escapeHtml(e.all_branches.join('، '))}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-icon-edit" data-id="${escapeHtml(e.id)}">${ICONS.edit()}</button>
+          <button type="button" class="btn-icon-delete" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.name_ar)}">${ICONS.trash()}</button>
+        </div>
+      </div>
+    </div>`).join('')}</div>`;
 
   area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -673,25 +674,25 @@ function renderStudentsTable() {
 
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
 
-  area.innerHTML = `
-    <div class="table-scroll-wrap"><table style="width:100%;border-collapse:collapse">
-      <thead><tr style="text-align:right;border-bottom:2px solid #eee">
-        <th style="padding:8px">الاسم</th><th style="padding:8px">الصف</th><th style="padding:8px">الشعبة</th><th style="padding:8px">الفرع</th><th style="padding:8px"></th>
-      </tr></thead>
-      <tbody>
-        ${list.map((s) => `
-          <tr style="border-bottom:1px solid #f0f0f0">
-            <td style="padding:8px" data-label="الاسم">${escapeHtml(s.name_ar)}</td>
-            <td style="padding:8px" data-label="الصف">${escapeHtml(s.grade)}</td>
-            <td style="padding:8px" data-label="الشعبة">${escapeHtml(s.section)}</td>
-            <td style="padding:8px" data-label="الفرع">${escapeHtml(s.branch)}</td>
-            <td style="padding:8px;white-space:nowrap" data-label="إجراءات">
-              <button type="button" class="btn-icon-edit" data-id="${escapeHtml(s.id)}">${ICONS.edit()}</button>
-              <button type="button" class="btn-icon-delete" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name_ar)}">${ICONS.trash()}</button>
-            </td>
-          </tr>`).join('')}
-      </tbody>
-    </table></div>`;
+  area.innerHTML = `<div class="person-card-grid">${list.map((s) => `
+    <div class="person-card">
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((s.name_ar || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(s.name_ar)}</div>
+          <div class="person-card-role">${escapeHtml(s.grade)} — ${escapeHtml(s.section)}</div>
+        </div>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>الفرع</span><span>${escapeHtml(s.branch)}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-icon-edit" data-id="${escapeHtml(s.id)}">${ICONS.edit()}</button>
+          <button type="button" class="btn-icon-delete" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name_ar)}">${ICONS.trash()}</button>
+        </div>
+      </div>
+    </div>`).join('')}</div>`;
 
   area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -746,35 +747,33 @@ function renderUsersTable() {
 
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد حسابات مطابقة</p>'; return; }
 
-  area.innerHTML = `
-    <div class="table-scroll-wrap"><table style="width:100%;border-collapse:collapse">
-      <thead><tr style="text-align:right;border-bottom:2px solid #eee">
-        <th style="padding:8px">الاسم</th><th style="padding:8px">اسم المستخدم</th><th style="padding:8px">الدور</th>
-        <th style="padding:8px">الحالة</th><th style="padding:8px"></th>
-      </tr></thead>
-      <tbody>
-        ${list.map((u) => {
-          const isActive = u.status === 'active';
-          return `
-          <tr style="border-bottom:1px solid #f0f0f0">
-            <td style="padding:8px" data-label="الاسم">${escapeHtml(u.nameAr)}</td>
-            <td style="padding:8px" data-label="اسم المستخدم">${escapeHtml(u.username)}</td>
-            <td style="padding:8px" data-label="الدور">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role || '—')}</td>
-            <td style="padding:8px" data-label="الحالة">
-              <span style="padding:3px 10px;border-radius:999px;font-size:11.5px;color:#fff;background:${isActive ? '#2f5233' : '#c62828'}">
-                <span class="status-dot ${isActive ? 'status-dot-on' : 'status-dot-off'}"></span>${isActive ? 'مفعَّل' : 'معطَّل'}
-              </span>
-            </td>
-            <td style="padding:8px;white-space:nowrap" data-label="إجراءات">
-              <button type="button" class="${isActive ? 'btn-danger-outline' : ''}" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}">
-                ${isActive ? 'تعطيل' : 'تفعيل'}
-              </button>
-              <button type="button" class="btn-reset-pass" data-id="${escapeHtml(u.id)}" data-name="${escapeHtml(u.nameAr)}" class="btn-outline-sm">${ICONS.key()} إعادة تعيين</button>
-            </td>
-          </tr>`;
-        }).join('')}
-      </tbody>
-    </table></div>`;
+  area.innerHTML = `<div class="person-card-grid">${list.map((u) => {
+    const isActive = u.status === 'active';
+    return `
+    <div class="person-card">
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((u.nameAr || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(u.nameAr)}</div>
+          <div class="person-card-role">${escapeHtml(ROLE_LABELS_AR[u.role] || u.role || '—')}</div>
+        </div>
+        <span class="status-badge ${isActive ? 'status-badge-on' : 'status-badge-off'}">
+          <span class="status-dot ${isActive ? 'status-dot-on' : 'status-dot-off'}"></span>${isActive ? 'مفعَّل' : 'معطَّل'}
+        </span>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>اسم المستخدم</span><span>${escapeHtml(u.username)}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-outline-sm ${isActive ? 'btn-danger-outline' : ''}" data-id="${escapeHtml(u.id)}" data-new-status="${isActive ? 'inactive' : 'active'}">
+            ${isActive ? 'تعطيل' : 'تفعيل'}
+          </button>
+          <button type="button" class="btn-reset-pass btn-outline-sm" data-id="${escapeHtml(u.id)}" data-name="${escapeHtml(u.nameAr)}">${ICONS.key()} إعادة تعيين</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
 
   area.querySelectorAll('[data-new-status]').forEach((btn) => {
     btn.addEventListener('click', async () => {
