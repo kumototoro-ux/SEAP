@@ -136,6 +136,7 @@ function renderShell() {
         <div class="sidebar-brand">
           ${mirqatLogo(30)}<span class="brand-text">مِرقاة</span>
           <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn">${ICONS.chevronDown()}</button>
+          <button type="button" class="sidebar-close-btn" id="sidebarCloseBtn">${ICONS.close()}</button>
         </div>
         <nav id="sidebarNav"></nav>
       </aside>
@@ -156,13 +157,6 @@ function renderShell() {
               <span class="user-avatar">${initials}</span>
               <span class="user-name">${escapeHtml(APP.user.fullName)}</span>
               ${ICONS.chevronDown()}
-              <div class="user-dropdown" id="userDropdown">
-                <div class="user-dropdown-info">
-                  <div class="user-dropdown-name">${escapeHtml(APP.user.fullName)}</div>
-                  <div class="user-dropdown-role">${escapeHtml(ROLE_LABELS_AR[APP.user.role] || APP.user.role)} — ${escapeHtml(APP.user.branch)}</div>
-                </div>
-                <button type="button" id="logoutBtn">${ICONS.logout()} تسجيل الخروج</button>
-              </div>
             </div>
           </div>
         </div>
@@ -212,6 +206,7 @@ function renderShell() {
     document.getElementById('sidebarOverlay').classList.toggle('show', isOpen);
   });
   document.getElementById('sidebarOverlay').addEventListener('click', closeSidebarMobile);
+  document.getElementById('sidebarCloseBtn').addEventListener('click', closeSidebarMobile);
 
   // 🆕 حماية إضافية بالجافاسكربت — تُخفي شريط البحث بناءً على العرض
   // الحقيقي للشاشة (window.innerWidth)، بلا اعتماد على استعلامات CSS
@@ -240,9 +235,8 @@ function renderShell() {
   // 🆕 قائمة المستخدم المنسدلة (بديل زر الخروج المنفصل — مطابق للتصميم المرجعي)
   document.getElementById('userMenuBtn').addEventListener('click', (e) => {
     e.stopPropagation();
-    document.getElementById('userDropdown').classList.toggle('show');
+    openMyProfileModal(); // 🆕 يفتح البطاقة الكاملة مباشرة بدل القائمة المنسدلة الصغيرة
   });
-  document.addEventListener('click', () => { document.getElementById('userDropdown')?.classList.remove('show'); });
 }
 
 function closeSidebarMobile() {
@@ -922,7 +916,12 @@ function wireFormToggle(toggleBtnId, formCardId, defaultLabel) {
  * 🆕 نافذة تفاصيل عامة (Modal) — تعرض معلومات وصلاحيات أي شخص (موظف/طالب/مستخدم)
  * بشكل موحَّد. تُستخدَم بكل صفحات الأشخاص الثلاث، بلا أي تكرار كود.
  */
-function showDetailModal(title, subtitle, rows) {
+/**
+ * 🆕 نافذة تفاصيل عامة (Modal) — تعرض معلومات وصلاحيات أي شخص (موظف/طالب/مستخدم)
+ * بشكل موحَّد. تُستخدَم بكل صفحات الأشخاص الثلاث، بلا أي تكرار كود.
+ * footerHtml اختياري — محتوى إضافي (أزرار إجراءات مثلاً) أسفل النافذة.
+ */
+function showDetailModal(title, subtitle, rows, footerHtml) {
   const existing = document.getElementById('detailModalOverlay');
   if (existing) existing.remove();
 
@@ -938,13 +937,14 @@ function showDetailModal(title, subtitle, rows) {
         </div>
         <button type="button" class="modal-close-btn" id="modalCloseBtn">${ICONS.close()}</button>
       </div>
-      <div class="modal-body">
+      <div class="modal-body" id="modalBodyContent">
         ${rows.map((r) => `
           <div class="modal-detail-row">
             <span class="modal-detail-label">${escapeHtml(r.label)}</span>
             <span class="modal-detail-value">${r.value ? escapeHtml(r.value) : '<span style="color:#bbb">—</span>'}</span>
           </div>`).join('')}
       </div>
+      ${footerHtml ? `<div class="modal-footer">${footerHtml}</div>` : ''}
     </div>`;
 
   document.body.appendChild(overlay);
@@ -953,6 +953,39 @@ function showDetailModal(title, subtitle, rows) {
   const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); };
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
   document.getElementById('modalCloseBtn').addEventListener('click', close);
+  return { overlay, close };
+}
+
+/** 🆕 بطاقة الملف الشخصي — تفتح عند الضغط على معلومات المستخدم بالشريط العلوي */
+function openMyProfileModal() {
+  const u = APP.user;
+  const { overlay } = showDetailModal(u.fullName, ROLE_LABELS_AR[u.role] || u.role, [
+    { label: 'اسم المستخدم', value: u.username },
+    { label: 'الدور (الصلاحية)', value: ROLE_LABELS_AR[u.role] || u.role },
+    { label: 'الفرع', value: u.branch },
+  ], `
+    <button type="button" id="openChangePasswordBtn" class="btn-outline-sm" style="width:100%;justify-content:center;margin-bottom:8px">${ICONS.key()} تغيير كلمة المرور</button>
+    <button type="button" id="modalLogoutBtn" class="btn-danger-outline btn-outline-sm" style="width:100%;justify-content:center">${ICONS.logout()} تسجيل الخروج</button>
+  `);
+
+  document.getElementById('modalLogoutBtn').addEventListener('click', doLogout);
+  document.getElementById('openChangePasswordBtn').addEventListener('click', () => {
+    const body = document.getElementById('modalBodyContent');
+    body.innerHTML = `
+      <div class="field"><label>كلمة المرور الجديدة</label><input type="password" id="myNewPassword" minlength="6"></div>
+      <button type="button" id="saveNewPasswordBtn" style="width:100%">حفظ كلمة المرور الجديدة</button>`;
+    document.getElementById('saveNewPasswordBtn').addEventListener('click', async () => {
+      const newPassword = document.getElementById('myNewPassword').value;
+      if (newPassword.length < 6) { showToast('كلمة المرور يجب ألا تقل عن 6 أحرف', 'error'); return; }
+      try {
+        await apiCall('auth', { method: 'POST', body: { action: 'forceSetPassword', newPassword } });
+        showToast('تم تغيير كلمة المرور بنجاح', 'success');
+        overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200);
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
 }
 
 function escapeHtml(str) {
