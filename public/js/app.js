@@ -147,6 +147,7 @@ function renderShell() {
             <button class="menu-toggle-btn" id="menuToggle">☰</button>
             <div class="header-brand-mobile">${mirqatLogo(24)}<span>مِرقاة</span></div>
           </div>
+          <div class="header-branch-label" id="headerBranchLabel"></div>
           <div class="header-search" style="position:relative">
             ${ICONS.search()}
             <input type="text" placeholder="بحث..." id="globalSearchInput" autocomplete="off">
@@ -247,6 +248,22 @@ function renderShell() {
   document.getElementById('openProfileInfoBtn').addEventListener('click', openMyProfileModal);
   document.getElementById('dropdownLogoutBtn').addEventListener('click', doLogout);
   wireDesktopSearch();
+
+  // 🆕 اسم الفرع بالشريط العلوي — أو اسم المدرسة لو المستخدم مرتبط بأكثر من فرع
+  (async () => {
+    const branchLabel = document.getElementById('headerBranchLabel');
+    const allBranches = APP.user.allBranches || [APP.user.branch];
+    if (allBranches.length > 1) {
+      try {
+        const settings = await getSettingsOnce();
+        branchLabel.textContent = settings.schoolName;
+      } catch (e) {
+        branchLabel.textContent = APP.user.branch; // احتياط لو فشل الجلب لأي سبب
+      }
+    } else {
+      branchLabel.textContent = APP.user.branch;
+    }
+  })();
 }
 
 function closeSidebarMobile() {
