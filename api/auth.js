@@ -73,13 +73,29 @@ async function handleForceSetPassword(req, res) {
   const user = requireAuth(req);
   const { newPassword } = validateBody(forceSetNewPasswordSchema, req.body);
 
+  // 🆕 قيد "مرة واحدة كل 30 يوماً" — يمنع تغييراً متكرراً بلا داعٍ (سبام).
+  // لا يُطبَّق أبداً على أول دخول (لا يوجد تاريخ تغيير سابق بعد).
+  const { data: userRow } = await supabaseAdmin.from('users').select('password_changed_at').eq('id', user.id).maybeSingle();
+  if (userRow?.password_changed_at) {
+    const daysSinceChange = (Date.now() - new Date(userRow.password_changed_at).getTime()) / (1000 * 60 * 60 * 24);
+    if (daysSinceChange < 30) {
+      const daysLeft = Math.ceil(30 - daysSinceChange);
+      const err = new Error(`يمكنك تغيير كلمة المرور مرة واحدة كل 30 يوماً فقط. تبقّى ${daysLeft} يوماً.`);
+      err.statusCode = 429;
+      throw err;
+    }
+  }
+
   const newHash = await bcrypt.hash(newPassword, 10);
-  const { error } = await supabaseAdmin.from('users').update({ password_hash: newHash }).eq('id', user.id);
+  const { error } = await supabaseAdmin.from('users').update({
+    password_hash: newHash,
+    password_changed_at: new Date().toISOString(),
+  }).eq('id', user.id);
   if (error) throw error;
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
-    action: 'تعيين كلمة مرور جديدة (أول دخول)', details: { forced: true }, branch: user.branch,
+    action: 'تغيير كلمة المرور', details: {}, branch: user.branch,
   });
 
   return res.status(200).json({ success: true, data: true });
