@@ -305,6 +305,7 @@ function resetEmployeeForm() {
   document.getElementById('addEmpForm').reset();
   document.getElementById('emp_editId').value = '';
   document.getElementById('emp_nationalIdField').style.display = 'block';
+  document.getElementById('emp_nationalId').required = true; // 🆕 يُعاد إجباره عند وضع الإضافة
   document.getElementById('emp_teacherScopeBox').style.display = 'none';
   document.getElementById('empFormTitle').textContent = '➕ إضافة موظف جديد';
   document.getElementById('addEmpBtn').textContent = 'إضافة الموظف';
@@ -317,6 +318,7 @@ function startEditEmployee(emp) {
   document.getElementById('emp_nameAr').value = emp.name_ar;
   document.getElementById('emp_nameEn').value = emp.name_en || '';
   document.getElementById('emp_nationalIdField').style.display = 'none'; // لا يُعدَّل رقم الهوية
+  document.getElementById('emp_nationalId').required = false; // 🆕 أهم سطر — يمنع خطأ "حقل مخفٍ إجباري" الذي كان يُجمِّد الزر بالكامل
   document.getElementById('emp_userType').value = emp.user_type;
   document.getElementById('emp_role').value = emp.role;
   document.getElementById('emp_teacherScopeBox').style.display = emp.role === 'role_teacher' ? 'block' : 'none';
