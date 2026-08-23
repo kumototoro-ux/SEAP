@@ -42,13 +42,20 @@ export default apiHandler(async function addEmployee(req, res) {
     user_type: d.userType,
     role: d.role,
     gender: d.gender || null,
-    branch: d.branch,
+    branch: d.branches[0], // 🆕 أول فرع مختار = الفرع الأساسي
     stage: d.stage || null,
     grades: d.grades,
     sections: d.sections,
     subjects: d.subjects,
   });
   if (empError) throw empError;
+
+  // 🆕 الفروع الإضافية (لو أكثر من فرع) تُخزَّن بجدول الربط المخصَّص
+  if (d.branches.length > 1) {
+    const extraBranches = d.branches.slice(1).map((branch) => ({ employee_id: newId, branch }));
+    const { error: branchError } = await supabaseAdmin.from('employee_branches').insert(extraBranches);
+    if (branchError) throw branchError;
+  }
 
   const passwordHash = await bcrypt.hash(d.nationalId, 10);
   const { error: userError } = await supabaseAdmin.from('users').insert({
