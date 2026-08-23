@@ -29,9 +29,8 @@ body {
 /* ---------- شريط علوي ---------- */
 .app-header {
   display: flex; align-items: center; gap: 12px;
-  background: var(--surface-card); color: var(--primary);
-  padding: 14px 20px; box-shadow: var(--shadow-1);
-  position: sticky; top: 0; z-index: 50; border-bottom: 1px solid var(--outline);
+  background: rgba(245,245,244,.8); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  color: var(--primary); padding: 18px 24px; position: sticky; top: 0; z-index: 50;
 }
 .app-header-title { font-weight: 800; font-size: 17px; flex: 1; }
 .menu-toggle-btn {
@@ -188,6 +187,42 @@ button:disabled { opacity: .5; cursor: wait; }
 /* ---------- 🆕 الشريط السفلي العائم (جوال فقط) — 4 اختصارات ثابتة ---------- */
 .bottom-nav { display: none; }
 
+/* 🆕 بطاقة قابلة للضغط — مؤشر واضح + أثر تفاعل خفيف */
+.person-card[data-card-clickable] { cursor: pointer; transition: box-shadow .15s ease, transform .15s ease; }
+.person-card[data-card-clickable]:hover { box-shadow: var(--shadow-2); transform: translateY(-1px); }
+
+/* ---------- 🆕 نافذة التفاصيل والصلاحيات (Modal) ---------- */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(32,33,36,.5); z-index: 500;
+  display: flex; align-items: center; justify-content: center; padding: 20px;
+  opacity: 0; transition: opacity .2s ease;
+}
+.modal-overlay.show { opacity: 1; }
+.modal-card {
+  background: var(--surface-card); border-radius: var(--radius); width: 100%; max-width: 420px;
+  max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-2);
+  transform: translateY(12px); transition: transform .2s ease;
+}
+.modal-overlay.show .modal-card { transform: translateY(0); }
+.modal-header {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 20px 20px 14px; border-bottom: 1px solid var(--surface); position: sticky; top: 0; background: var(--surface-card);
+}
+.modal-header h3 { margin: 0; font-size: 16.5px; font-weight: 800; color: var(--primary); }
+.modal-subtitle { margin: 4px 0 0; font-size: 12.5px; color: var(--text-muted); }
+.modal-close-btn {
+  background: var(--surface); border: none; width: 30px; height: 30px; border-radius: 999px;
+  display: flex; align-items: center; justify-content: center; color: var(--primary); cursor: pointer; padding: 0; flex-shrink: 0;
+}
+.modal-body { padding: 16px 20px 22px; }
+.modal-detail-row {
+  display: flex; justify-content: space-between; gap: 14px; padding: 10px 0;
+  border-bottom: 1px solid var(--surface); font-size: 13px;
+}
+.modal-detail-row:last-child { border-bottom: none; }
+.modal-detail-label { color: var(--text-muted); flex-shrink: 0; }
+.modal-detail-value { color: var(--primary); font-weight: 600; text-align: left; }
+
 /* ---------- استجابة الجوال ---------- */
 .sidebar-overlay {
   display: none; position: fixed; inset: 0; background: rgba(32,33,36,.35);
@@ -277,10 +312,15 @@ button:disabled { opacity: .5; cursor: wait; }
 /* ---------- 🆕 أزرار وأيقونات الشريط العلوي ---------- */
 .header-actions { display: flex; align-items: center; gap: 10px; }
 .header-icon-btn {
-  background: var(--surface); border: none; width: 38px; height: 38px; border-radius: 999px;
+  background: var(--surface-card); border: 1px solid var(--outline); width: 38px; height: 38px; border-radius: 999px;
   display: flex; align-items: center; justify-content: center; color: var(--primary); cursor: pointer; padding: 0;
+  position: relative;
 }
-.header-icon-btn:hover { background: var(--outline); }
+.header-icon-btn:hover { background: var(--surface); }
+.notif-badge {
+  position: absolute; top: 6px; left: 6px; width: 8px; height: 8px; border-radius: 50%;
+  background: #C4483A; border: 2px solid var(--surface-card);
+}
 
 .header-user { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 999px; }
 .header-user:hover { background: var(--surface); }
