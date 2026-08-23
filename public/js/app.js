@@ -190,23 +190,41 @@ async function renderEmployeesView() {
   main.innerHTML = `
     <div class="card">
       <h2>➕ إضافة موظف جديد</h2>
-      <div class="field"><label>الاسم بالعربي</label><input id="emp_nameAr" type="text"></div>
-      <div class="field"><label>رقم الهوية (10 أرقام)</label><input id="emp_nationalId" type="text" maxlength="10"></div>
-      <div class="field"><label>نوع المستخدم</label><input id="emp_userType" type="text" placeholder="مثال: teacher"></div>
-      <div class="field"><label>الدور</label><input id="emp_role" type="text" placeholder="مثال: role_teacher"></div>
-      <div class="field"><label>الفرع</label><input id="emp_branch" type="text"></div>
-      <button id="addEmpBtn">إضافة الموظف</button>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية — لن يُقبَل الحفظ إلا بعد تعبئتها كاملة، لضمان عدم نسيان أي بيانات مهمة (خصوصاً تحديد الدور)</p>
+      <form id="addEmpForm">
+        <div class="field"><label>الاسم بالعربي *</label><input id="emp_nameAr" type="text" required></div>
+        <div class="field"><label>الاسم بالإنجليزي *</label><input id="emp_nameEn" type="text" required></div>
+        <div class="field"><label>رقم الهوية/الإقامة/الجواز *</label><input id="emp_nationalId" type="text" maxlength="20" required></div>
+        <div class="field"><label>نوع المستخدم *</label><input id="emp_userType" type="text" placeholder="مثال: teacher" required></div>
+        <div class="field"><label>الدور *</label>
+          <select id="emp_role" required>
+            <option value="" disabled selected>-- اختر الدور --</option>
+            <option value="role_admin">أدمن</option>
+            <option value="role_teacher">معلم</option>
+            <option value="role_teacher_sup">مشرف معلمين</option>
+            <option value="role_student_sup">مشرف طلاب</option>
+            <option value="Admission">إدارة القبول والتسجيل</option>
+            <option value="role_branch_monitor">مراقب فروع</option>
+          </select>
+        </div>
+        <div class="field"><label>الفرع *</label><input id="emp_branch" type="text" required></div>
+        <button type="submit" id="addEmpBtn">إضافة الموظف</button>
+      </form>
     </div>
     <div class="card">
       <h3>قائمة الموظفين</h3>
       <div id="empListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
-  document.getElementById('addEmpBtn').addEventListener('click', addEmployeeHandler);
+  // 🆕 الاستماع لحدث "submit" (لا "click" على الزر) — هذا ما يُفعِّل تحقق
+  // المتصفح التلقائي من خاصية required فعلياً، ويُظهر تنبيهاً بصرياً واضحاً
+  // (تمييز أحمر + رسالة منبثقة) على أي حقل ناقص، بلا أي كود إضافي منّا
+  document.getElementById('addEmpForm').addEventListener('submit', addEmployeeHandler);
   loadEmployeesList();
 }
 
-async function addEmployeeHandler() {
+async function addEmployeeHandler(e) {
+  e.preventDefault(); // يمنع إعادة تحميل الصفحة الافتراضية، لكن تحقق required حصل بالفعل قبل هذا السطر
   const btn = document.getElementById('addEmpBtn');
   btn.disabled = true; btn.textContent = 'جارِ الإضافة...';
   try {
@@ -214,15 +232,16 @@ async function addEmployeeHandler() {
       method: 'POST',
       body: {
         nameAr: document.getElementById('emp_nameAr').value.trim(),
+        nameEn: document.getElementById('emp_nameEn').value.trim(),
         nationalId: document.getElementById('emp_nationalId').value.trim(),
         userType: document.getElementById('emp_userType').value.trim(),
-        role: document.getElementById('emp_role').value.trim(),
+        role: document.getElementById('emp_role').value,
         branch: document.getElementById('emp_branch').value.trim(),
         grades: [], sections: [], subjects: [],
       },
     });
     showToast('تم إضافة الموظف بنجاح — كلمة المرور المبدئية هي رقم الهوية', 'success');
-    ['emp_nameAr', 'emp_nationalId', 'emp_userType', 'emp_role', 'emp_branch'].forEach((id) => { document.getElementById(id).value = ''; });
+    ['emp_nameAr', 'emp_nameEn', 'emp_nationalId', 'emp_userType', 'emp_role', 'emp_branch'].forEach((id) => { document.getElementById(id).value = ''; });
     loadEmployeesList();
   } catch (e) {
     showToast(e.message, 'error');
