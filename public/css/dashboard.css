@@ -183,7 +183,29 @@ table td { font-size: 13.5px; }
   .user-name { display: none; } /* 🆕 يبقى الأفاتار فقط، يوفّر مساحة حرجة */
   .app-header { padding: 12px 14px; gap: 8px; }
   .header-actions { gap: 6px; }
+  .header-brand-mobile { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; color: var(--primary); }
+
+  /* 🆕 كل جدول يتحوّل لبطاقات مكدَّسة بالجوال — لا مزيد من التمرير الأفقي المزعج */
+  .table-scroll-wrap { overflow-x: visible; }
+  .table-scroll-wrap table { min-width: 0; width: 100%; }
+  .table-scroll-wrap table thead { display: none; }
+  .table-scroll-wrap table, .table-scroll-wrap tbody, .table-scroll-wrap tr, .table-scroll-wrap td { display: block; width: 100%; }
+  .table-scroll-wrap tr {
+    background: var(--surface-card); border: 1px solid var(--outline); border-radius: var(--radius-sm);
+    margin-bottom: 12px; padding: 10px 14px;
+  }
+  .table-scroll-wrap td {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    padding: 8px 0 !important; border-bottom: 1px solid var(--surface); text-align: left;
+  }
+  .table-scroll-wrap td:last-child { border-bottom: none; }
+  .table-scroll-wrap td::before {
+    content: attr(data-label); font-weight: 700; color: var(--text-muted); font-size: 12px; flex-shrink: 0;
+  }
 }
+
+/* 🆕 الشعار المصغَّر بالشريط العلوي مخفي بسطح المكتب دائماً (يظهر بالقائمة الجانبية هناك أصلاً) */
+.header-brand-mobile { display: none; }
 
 /* ---------- 🆕 طيّ الشريط الجانبي (أيقونات فقط) — سطح المكتب فقط ---------- */
 .sidebar-collapse-btn {
