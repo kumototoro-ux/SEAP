@@ -190,6 +190,20 @@ button:disabled { opacity: .5; cursor: wait; }
 .status-badge-on { background: #E7F5EC; color: #2F7A4D; }
 .status-badge-off { background: #FBEAE8; color: #C4483A; }
 
+/* ---------- 🆕 نتائج البحث الشامل ---------- */
+.search-results-box {
+  display: none; position: absolute; top: calc(100% + 8px); right: 0; left: 0;
+  background: var(--surface-card); border: 1px solid var(--outline); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-2); max-height: 340px; overflow-y: auto; z-index: 70; text-align: right;
+}
+.search-results-box.show { display: block; }
+.search-group-label { padding: 10px 14px 4px; font-size: 11px; font-weight: 800; color: var(--text-muted); }
+.search-result-item { padding: 10px 14px; cursor: pointer; }
+.search-result-item:hover { background: var(--surface); }
+.search-result-label { font-size: 13.5px; font-weight: 600; color: var(--primary); }
+.search-result-sublabel { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
+#mobileSearchResults .search-result-item { border-radius: var(--radius-sm); }
+
 /* ---------- 🆕 الشريط السفلي العائم (جوال فقط) — 4 اختصارات ثابتة ---------- */
 .bottom-nav { display: none; }
 
@@ -237,11 +251,14 @@ button:disabled { opacity: .5; cursor: wait; }
 }
 
 @media (max-width: 860px) {
-  .sidebar-overlay.show { display: block; opacity: 1; pointer-events: auto; } /* 🆕 مقيَّد بالجوال فقط الآن */
+  .sidebar-overlay.show {
+    display: block; opacity: 1; pointer-events: auto;
+    top: 70px !important; z-index: 44 !important; /* 🆕 لا تغطي الشريط العلوي — زر ☰ يبقى فوقها ومتاحاً دائماً */
+  }
   .sidebar {
-    position: fixed !important; top: 0 !important; bottom: 0 !important; right: 0 !important; left: auto !important;
-    height: 100vh !important; width: 78vw !important; max-width: 280px !important;
-    z-index: 999 !important; transform: translateX(105%); transition: transform .25s ease;
+    position: fixed !important; top: 70px !important; bottom: 0 !important; right: 0 !important; left: auto !important;
+    height: calc(100vh - 70px) !important; width: 78vw !important; max-width: 280px !important;
+    z-index: 45 !important; transform: translateX(105%); transition: transform .25s ease;
     overflow-y: auto; box-shadow: var(--shadow-2); margin: 0 !important;
   }
   .sidebar.open { transform: translateX(0) !important; }
