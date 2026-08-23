@@ -12,12 +12,13 @@ const APP = { token: null, user: null };
 const PAGE_REGISTRY = {
   home: { label: '🏠 الرئيسية', render: renderHomeView },
   employees: { label: '👩‍🏫 الموظفون', render: renderEmployeesView },
+  students: { label: '👨‍🎓 الطلاب', render: renderStudentsView },
   users: { label: '🔐 المستخدمون', render: renderUsersView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'users'],
+  role_admin: ['home', 'employees', 'students', 'users'],
 };
 
 function pagesForCurrentUser() {
@@ -433,6 +434,209 @@ function renderEmployeesTable() {
         await apiCall('employees', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
         showToast('تم الحذف بنجاح', 'success');
         loadEmployeesList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+}
+
+/* ===================== صفحة الطلاب ===================== */
+
+async function renderStudentsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  const settings = await getSettingsOnce();
+  APP.allStudents = [];
+
+  main.innerHTML = `
+    <div class="card" id="stuFormCard">
+      <h2 id="stuFormTitle">➕ تسجيل طالب جديد</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
+      <form id="addStuForm">
+        <input type="hidden" id="stu_editId" value="">
+        <div class="field"><label>الاسم بالعربي *</label><input id="stu_nameAr" type="text" required></div>
+        <div class="field"><label>الاسم بالإنجليزي * <span style="font-weight:400;color:#888;font-size:11.5px">(تحويل تقريبي تلقائي)</span></label><input id="stu_nameEn" type="text" required></div>
+        <div class="field" id="stu_nationalIdField"><label>رقم الهوية/الإقامة/الجواز *</label><input id="stu_nationalId" type="text" maxlength="20" required></div>
+        <div class="field"><label>الجنسية</label><input id="stu_nationality" type="text"></div>
+        <div class="field"><label>تاريخ الميلاد</label><input id="stu_dateOfBirth" type="date"></div>
+        <div class="field"><label>الجنس</label>
+          <select id="stu_gender">
+            <option value="">-- غير محدَّد --</option>
+            <option value="ذكر">ذكر</option>
+            <option value="أنثى">أنثى</option>
+          </select>
+        </div>
+        <div class="field"><label>الفرع *</label>
+          <select id="stu_branch" required><option value="" disabled selected>-- اختر --</option>
+            ${settings.branches.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>المرحلة *</label>
+          <select id="stu_stage" required><option value="" disabled selected>-- اختر --</option>
+            ${settings.stages.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>الصف *</label>
+          <select id="stu_grade" required><option value="" disabled selected>-- اختر --</option>
+            ${settings.grades.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="field"><label>الشعبة *</label>
+          <select id="stu_section" required><option value="" disabled selected>-- اختر --</option>
+            ${settings.sections.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="filter-card-title">📖 المواد الدراسية</div>
+        <div class="checkbox-list" id="stu_subjectsBox">${scopeCheckboxesHtml(settings.subjects, [], 'stu-subject-cb')}</div>
+
+        <button type="submit" id="addStuBtn" style="margin-top:14px">تسجيل الطالب</button>
+        <button type="button" id="cancelStuEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>قائمة الطلاب</h3>
+      <div class="field"><label>🔍 بحث بالاسم أو الصف أو الشعبة</label><input id="stuSearchInput" type="text"></div>
+      <div id="stuListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('stu_nameAr').addEventListener('blur', () => {
+    const enField = document.getElementById('stu_nameEn');
+    if (!enField.value.trim()) enField.value = transliterateArabicToEnglish(document.getElementById('stu_nameAr').value);
+  });
+
+  document.getElementById('addStuForm').addEventListener('submit', saveStudentHandler);
+  document.getElementById('cancelStuEditBtn').addEventListener('click', resetStudentForm);
+  document.getElementById('stuSearchInput').addEventListener('input', renderStudentsTable);
+
+  loadStudentsList();
+}
+
+function resetStudentForm() {
+  document.getElementById('addStuForm').reset();
+  document.getElementById('stu_editId').value = '';
+  document.getElementById('stu_nationalIdField').style.display = 'block';
+  document.getElementById('stu_nationalId').required = true;
+  document.getElementById('stuFormTitle').textContent = '➕ تسجيل طالب جديد';
+  document.getElementById('addStuBtn').textContent = 'تسجيل الطالب';
+  document.getElementById('cancelStuEditBtn').style.display = 'none';
+  document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = false; });
+}
+
+function startEditStudent(stu) {
+  document.getElementById('stu_editId').value = stu.id;
+  document.getElementById('stu_nameAr').value = stu.name_ar;
+  document.getElementById('stu_nameEn').value = stu.name_en || '';
+  document.getElementById('stu_nationalIdField').style.display = 'none';
+  document.getElementById('stu_nationalId').required = false;
+  document.getElementById('stu_nationality').value = stu.nationality || '';
+  document.getElementById('stu_dateOfBirth').value = stu.date_of_birth || '';
+  document.getElementById('stu_gender').value = stu.gender || '';
+  document.getElementById('stu_branch').value = stu.branch;
+  document.getElementById('stu_stage').value = stu.stage;
+  document.getElementById('stu_grade').value = stu.grade;
+  document.getElementById('stu_section').value = stu.section;
+  document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = (stu.subjects || []).includes(cb.value); });
+
+  document.getElementById('stuFormTitle').textContent = '✏️ تعديل بيانات: ' + stu.name_ar;
+  document.getElementById('addStuBtn').textContent = 'حفظ التعديلات';
+  document.getElementById('cancelStuEditBtn').style.display = 'inline-block';
+  document.getElementById('stuFormCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveStudentHandler(e) {
+  e.preventDefault();
+  const editId = document.getElementById('stu_editId').value;
+  const btn = document.getElementById('addStuBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+
+  const body = {
+    nameAr: document.getElementById('stu_nameAr').value.trim(),
+    nameEn: document.getElementById('stu_nameEn').value.trim(),
+    nationality: document.getElementById('stu_nationality').value.trim(),
+    dateOfBirth: document.getElementById('stu_dateOfBirth').value,
+    gender: document.getElementById('stu_gender').value,
+    branch: document.getElementById('stu_branch').value,
+    stage: document.getElementById('stu_stage').value,
+    grade: document.getElementById('stu_grade').value,
+    section: document.getElementById('stu_section').value,
+    subjects: collectCheckedValues('.stu-subject-cb'),
+  };
+  if (!editId) body.nationalId = document.getElementById('stu_nationalId').value.trim();
+
+  try {
+    if (editId) {
+      await apiCall('students', { method: 'POST', body: { action: 'update', id: editId, ...body } });
+      showToast('تم تحديث بيانات الطالب بنجاح', 'success');
+    } else {
+      await apiCall('students', { method: 'POST', body: { action: 'add', ...body } });
+      showToast('تم تسجيل الطالب بنجاح — حساب دخوله بموقعه المستقبلي جاهز أيضاً', 'success');
+    }
+    resetStudentForm();
+    loadStudentsList();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'تسجيل الطالب';
+  }
+}
+
+async function loadStudentsList() {
+  const area = document.getElementById('stuListArea');
+  try {
+    APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+    renderStudentsTable();
+  } catch (e) {
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderStudentsTable() {
+  const area = document.getElementById('stuListArea');
+  const q = (document.getElementById('stuSearchInput').value || '').trim().toLowerCase();
+  const list = APP.allStudents.filter((s) => {
+    if (!q) return true;
+    return s.name_ar.toLowerCase().includes(q) || s.grade.toLowerCase().includes(q) || s.section.toLowerCase().includes(q);
+  });
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
+
+  area.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="text-align:right;border-bottom:2px solid #eee">
+        <th style="padding:8px">الاسم</th><th style="padding:8px">الصف</th><th style="padding:8px">الشعبة</th><th style="padding:8px">الفرع</th><th style="padding:8px"></th>
+      </tr></thead>
+      <tbody>
+        ${list.map((s) => `
+          <tr style="border-bottom:1px solid #f0f0f0">
+            <td style="padding:8px">${escapeHtml(s.name_ar)}</td>
+            <td style="padding:8px">${escapeHtml(s.grade)}</td>
+            <td style="padding:8px">${escapeHtml(s.section)}</td>
+            <td style="padding:8px">${escapeHtml(s.branch)}</td>
+            <td style="padding:8px;white-space:nowrap">
+              <button type="button" class="btn-edit-stu" data-id="${escapeHtml(s.id)}">✏️</button>
+              <button type="button" class="btn-del-stu" data-id="${escapeHtml(s.id)}" data-name="${escapeHtml(s.name_ar)}" style="background:#c62828">🗑️</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  area.querySelectorAll('.btn-edit-stu').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const stu = APP.allStudents.find((s) => s.id === btn.getAttribute('data-id'));
+      if (stu) startEditStudent(stu);
+    });
+  });
+  area.querySelectorAll('.btn-del-stu').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`تأكيد حذف الطالب "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
+      try {
+        await apiCall('students', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
+        showToast('تم الحذف بنجاح', 'success');
+        loadStudentsList();
       } catch (e) {
         showToast(e.message, 'error');
       }
