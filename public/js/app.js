@@ -147,10 +147,11 @@ function renderShell() {
             <button class="menu-toggle-btn" id="menuToggle">☰</button>
             <div class="header-brand-mobile">${mirqatLogo(24)}<span>مِرقاة</span></div>
           </div>
-          <div class="header-search">
+          <div class="header-search" style="position:relative">
             ${ICONS.search()}
-            <input type="text" placeholder="بحث..." id="globalSearchInput">
+            <input type="text" placeholder="بحث..." id="globalSearchInput" autocomplete="off">
             <span class="header-search-kbd">⌘K</span>
+            <div class="search-results-box" id="searchResultsBox"></div>
           </div>
           <div class="header-actions">
             <button class="header-icon-btn" id="notifBtn">${ICONS.bell()}<span class="notif-badge" id="notifBadge" style="display:none"></span></button>
@@ -158,6 +159,10 @@ function renderShell() {
               <span class="user-avatar">${initials}</span>
               <span class="user-name">${escapeHtml(APP.user.fullName)}</span>
               ${ICONS.chevronDown()}
+              <div class="user-dropdown" id="userDropdown">
+                <button type="button" id="openProfileInfoBtn">${ICONS.users()} معلومات المستخدم</button>
+                <button type="button" id="dropdownLogoutBtn">${ICONS.logout()} تسجيل الخروج</button>
+              </div>
             </div>
           </div>
         </div>
@@ -180,7 +185,7 @@ function renderShell() {
   const BOTTOM_NAV_ITEMS = [
     { key: 'home', label: 'الرئيسية', icon: 'home', ready: true },
     { key: 'messages', label: 'المراسلات', icon: 'messages', ready: false },
-    { key: 'search', label: 'بحث', icon: 'search', ready: false },
+    { key: 'search', label: 'بحث', icon: 'search', ready: true },
     { key: 'tasks', label: 'المهام', icon: 'tasks', ready: false },
   ];
   document.getElementById('bottomNav').innerHTML = BOTTOM_NAV_ITEMS
@@ -192,6 +197,7 @@ function renderShell() {
       const key = a.getAttribute('data-bottom-key');
       const isReady = a.getAttribute('data-ready') === 'true';
       if (!isReady) { showToast('قريباً — هذي الصفحة لم تُبنَ بعد', 'error'); return; }
+      if (key === 'search') { openSearchModal(); return; } // 🆕 البحث يفتح نافذة مخصَّصة بالجوال بدل صفحة
       navigate(key);
       document.querySelectorAll('#bottomNav a').forEach((x) => x.classList.remove('active'));
       a.classList.add('active');
@@ -235,8 +241,12 @@ function renderShell() {
   // 🆕 قائمة المستخدم المنسدلة (بديل زر الخروج المنفصل — مطابق للتصميم المرجعي)
   document.getElementById('userMenuBtn').addEventListener('click', (e) => {
     e.stopPropagation();
-    openMyProfileModal(); // 🆕 يفتح البطاقة الكاملة مباشرة بدل القائمة المنسدلة الصغيرة
+    document.getElementById('userDropdown').classList.toggle('show');
   });
+  document.addEventListener('click', () => { document.getElementById('userDropdown')?.classList.remove('show'); });
+  document.getElementById('openProfileInfoBtn').addEventListener('click', openMyProfileModal);
+  document.getElementById('dropdownLogoutBtn').addEventListener('click', doLogout);
+  wireDesktopSearch();
 }
 
 function closeSidebarMobile() {
@@ -988,6 +998,158 @@ function openMyProfileModal() {
         showToast(e.message, 'error');
       }
     });
+  });
+}
+
+/**
+ * 🆕 محرّك البحث الشامل — يبحث بالصفحات المتاحة للمستخدم + الموظفين
+ * + الطلاب + المستخدمين (حسب صلاحيات المستخدم الحالي فقط). يُستخدَم
+ * من مكانَين: شريط البحث بسطح المكتب (قائمة منسدلة)، ونافذة البحث
+ * المخصَّصة بالجوال — بنفس المنطق بالضبط، بلا أي تكرار كود.
+ */
+async function performGlobalSearch(query) {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) return [];
+  const results = [];
+
+  // 1) الصفحات المتاحة للمستخدم
+  pagesForCurrentUser().forEach((key) => {
+    if (PAGE_REGISTRY[key].label.toLowerCase().includes(q)) {
+      results.push({ group: 'صفحات', label: PAGE_REGISTRY[key].label, action: () => navigate(key) });
+    }
+  });
+
+  // 2) الموظفون (يُجلَبون فقط لو المستخدم يملك صلاحية الوصول لصفحتهم)
+  if (pagesForCurrentUser().includes('employees')) {
+    try {
+      if (!APP.allEmployees || !APP.allEmployees.length) {
+        APP.allEmployees = await apiCall('employees', { method: 'POST', body: { action: 'list' } });
+      }
+      APP.allEmployees.filter((e) => e.name_ar.toLowerCase().includes(q)).slice(0, 5).forEach((e) => {
+        results.push({
+          group: 'الموظفون', label: e.name_ar, sublabel: ROLE_LABELS_AR[e.role] || e.role,
+          action: () => { navigate('employees'); setTimeout(() => showEmployeeDetailById(e.id), 150); },
+        });
+      });
+    } catch (err) { /* تجاهل بصمت — البحث لا يجب يعطّل الصفحة */ }
+  }
+
+  // 3) الطلاب
+  if (pagesForCurrentUser().includes('students')) {
+    try {
+      if (!APP.allStudents || !APP.allStudents.length) {
+        APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+      }
+      APP.allStudents.filter((s) => s.name_ar.toLowerCase().includes(q)).slice(0, 5).forEach((s) => {
+        results.push({
+          group: 'الطلاب', label: s.name_ar, sublabel: `${s.grade} — ${s.section}`,
+          action: () => { navigate('students'); setTimeout(() => showStudentDetailById(s.id), 150); },
+        });
+      });
+    } catch (err) { /* تجاهل بصمت */ }
+  }
+
+  // 4) المستخدمون
+  if (pagesForCurrentUser().includes('users')) {
+    try {
+      if (!APP.allUsers || !APP.allUsers.length) {
+        APP.allUsers = await apiCall('users', { method: 'POST', body: { action: 'list' } });
+      }
+      APP.allUsers.filter((u) => u.nameAr.toLowerCase().includes(q) || u.username.toLowerCase().includes(q)).slice(0, 5).forEach((u) => {
+        results.push({
+          group: 'المستخدمون', label: u.nameAr, sublabel: u.username,
+          action: () => { navigate('users'); },
+        });
+      });
+    } catch (err) { /* تجاهل بصمت */ }
+  }
+
+  return results.slice(0, 15);
+}
+
+function showEmployeeDetailById(id) {
+  document.querySelector(`.person-card[data-id="${id}"]`)?.click();
+}
+function showStudentDetailById(id) {
+  document.querySelector(`.person-card[data-id="${id}"]`)?.click();
+}
+
+function renderSearchResultsList(results) {
+  if (!results.length) return '<p style="padding:14px;color:#888;font-size:13px;text-align:center">لا نتائج مطابقة</p>';
+  const groups = {};
+  results.forEach((r) => { (groups[r.group] = groups[r.group] || []).push(r); });
+  return Object.entries(groups).map(([group, items]) => `
+    <div class="search-group-label">${escapeHtml(group)}</div>
+    ${items.map((r, i) => `<div class="search-result-item" data-idx="${results.indexOf(r)}">
+      <div class="search-result-label">${escapeHtml(r.label)}</div>
+      ${r.sublabel ? `<div class="search-result-sublabel">${escapeHtml(r.sublabel)}</div>` : ''}
+    </div>`).join('')}
+  `).join('');
+}
+
+/* -------------------- بحث سطح المكتب: قائمة منسدلة داخل الشريط العلوي -------------------- */
+function wireDesktopSearch() {
+  const input = document.getElementById('globalSearchInput');
+  const box = document.getElementById('searchResultsBox');
+  if (!input || !box) return;
+  let currentResults = [];
+  let debounceTimer;
+
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      currentResults = await performGlobalSearch(input.value);
+      box.innerHTML = renderSearchResultsList(currentResults);
+      box.classList.toggle('show', input.value.trim().length >= 2);
+      box.querySelectorAll('.search-result-item').forEach((el) => {
+        el.addEventListener('click', () => {
+          currentResults[Number(el.getAttribute('data-idx'))]?.action();
+          box.classList.remove('show'); input.value = '';
+        });
+      });
+    }, 250);
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.header-search')) box.classList.remove('show'); });
+}
+
+/* -------------------- بحث الجوال: نافذة مخصَّصة -------------------- */
+function openSearchModal() {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay show';
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:480px">
+      <div class="modal-header">
+        <h3>بحث شامل</h3>
+        <button type="button" class="modal-close-btn" id="searchModalCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><input type="text" id="mobileSearchInput" placeholder="اكتب للبحث..." autocomplete="off"></div>
+        <div id="mobileSearchResults"></div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('searchModalCloseBtn').addEventListener('click', close);
+
+  const input = document.getElementById('mobileSearchInput');
+  const resultsBox = document.getElementById('mobileSearchResults');
+  let currentResults = [];
+  let debounceTimer;
+  input.focus();
+  input.addEventListener('input', () => {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      currentResults = await performGlobalSearch(input.value);
+      resultsBox.innerHTML = renderSearchResultsList(currentResults);
+      resultsBox.querySelectorAll('.search-result-item').forEach((el) => {
+        el.addEventListener('click', () => {
+          currentResults[Number(el.getAttribute('data-idx'))]?.action();
+          close();
+        });
+      });
+    }, 250);
   });
 }
 
