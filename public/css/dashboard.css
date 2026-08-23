@@ -116,3 +116,25 @@ body { background: var(--surface-variant); }
   .sidebar.open { transform: translateX(0); }
   .main-content { padding: 16px; }
 }
+
+/* ---------- عناصر نموذج إضافية (قوائم اختيار متعددة، عناوين فرعية) ---------- */
+.field { text-align: right; margin-bottom: 14px; }
+.field label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; }
+.field input, .field select {
+  width: 100%; padding: 9px 12px; border: 1.5px solid var(--outline); border-radius: 8px;
+  font-size: 14px; font-family: inherit;
+}
+.filter-card-title { font-size: 13px; font-weight: 700; color: var(--primary); margin: 14px 0 6px; }
+.checkbox-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+.checkbox-item {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px;
+  border: 1.5px solid var(--outline); border-radius: 999px; font-size: 12.5px; cursor: pointer;
+  background: #fff; user-select: none;
+}
+.checkbox-item input { width: auto !important; margin: 0; }
+
+button {
+  border: none; border-radius: 8px; background: var(--primary); color: #fff;
+  font-size: 14px; font-weight: 600; cursor: pointer; padding: 10px 16px;
+}
+button:disabled { opacity: .6; cursor: wait; }
