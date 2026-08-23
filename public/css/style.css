@@ -1,0 +1,40 @@
+/* public/css/style.css
+ * =====================================================================
+ * تنسيقات صفحة الدخول فقط — كل شيء محصور داخل .login-wrap عمداً حتى لا
+ * يتسرّب لأي تنسيق آخر بلوحة التحكم (كان هذا خللاً حقيقياً صحّحته هنا:
+ * تنسيق body كان يُطبَّق على كل الصفحات بلا استثناء).
+ * ===================================================================== */
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Segoe UI', Tahoma, Arial, sans-serif; margin: 0; color: #1a1a1a;
+}
+
+.login-wrap {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(160deg, #2f5233, #4a7c52);
+}
+
+.login-wrap .login-card {
+  background: #fff; border-radius: 16px; padding: 36px 30px; width: 360px; max-width: 90vw;
+  box-shadow: 0 10px 30px rgba(0,0,0,.2); text-align: center;
+}
+
+.login-wrap h2 { margin: 0 0 20px; color: #2f5233; }
+
+.login-wrap .field { text-align: right; margin-bottom: 14px; }
+.login-wrap .field label { display: block; font-size: 13px; color: #555; margin-bottom: 4px; }
+.login-wrap .field input {
+  width: 100%; padding: 10px 12px; border: 1.5px solid #d8ded2; border-radius: 8px;
+  font-size: 14px; font-family: inherit;
+}
+
+.login-wrap button {
+  width: 100%; padding: 11px; border: none; border-radius: 8px; background: #2f5233;
+  color: #fff; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 6px;
+}
+.login-wrap button:disabled { opacity: .6; cursor: wait; }
+
+.login-sub { color: #666; font-size: 13.5px; margin: -8px 0 16px; }
+
