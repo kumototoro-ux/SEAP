@@ -185,17 +185,68 @@ function renderHomeView() {
 
 /* ===================== صفحة الموظفين ===================== */
 
+let cachedSettings = null;
+
+async function getSettingsOnce() {
+  if (!cachedSettings) cachedSettings = await apiCall('get-settings', { requiresAuth: false });
+  return cachedSettings;
+}
+
+/**
+ * 🆕 تحويل تقريبي (Transliteration) من العربي للإنجليزي بالحروف — ليس
+ * ترجمة حقيقية (الأسماء لا تُترجَم، بل تُكتَب بلفظها بحروف لاتينية).
+ * يملأ حقل الاسم الإنجليزي تلقائياً كمقترح أولي، والأدمن يقدر يعدّله
+ * يدوياً بأي وقت (لا يُفرَض عليه، فقط يوفّر عليه الكتابة من الصفر).
+ */
+const ARABIC_TO_LATIN_MAP = {
+  'ا': 'a', 'أ': 'a', 'إ': 'i', 'آ': 'aa', 'ى': 'a', 'ب': 'b', 'ت': 't', 'ث': 'th',
+  'ج': 'j', 'ح': 'h', 'خ': 'kh', 'د': 'd', 'ذ': 'th', 'ر': 'r', 'ز': 'z', 'س': 's',
+  'ش': 'sh', 'ص': 's', 'ض': 'd', 'ط': 't', 'ظ': 'z', 'ع': 'a', 'غ': 'gh', 'ف': 'f',
+  'ق': 'q', 'ك': 'k', 'ل': 'l', 'م': 'm', 'ن': 'n', 'ه': 'h', 'و': 'w', 'ي': 'y',
+  'ة': 'ah', 'ء': 'a', 'ئ': 'e', 'ؤ': 'o', ' ': ' ',
+};
+
+function transliterateArabicToEnglish(text) {
+  const letters = text.trim().split('').map((ch) => ARABIC_TO_LATIN_MAP[ch] ?? '').join('');
+  return letters.split(' ').filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+}
+
+function branchCheckboxesHtml(branches, selected, prefix) {
+  return branches.map((b) => `
+    <label class="checkbox-item">
+      <input type="checkbox" class="${prefix}-branch-cb" value="${escapeHtml(b)}" ${selected.includes(b) ? 'checked' : ''}> ${escapeHtml(b)}
+    </label>`).join('');
+}
+
+function scopeCheckboxesHtml(items, selected, cls) {
+  return items.map((item) => `
+    <label class="checkbox-item">
+      <input type="checkbox" class="${cls}" value="${escapeHtml(item)}" ${selected.includes(item) ? 'checked' : ''}> ${escapeHtml(item)}
+    </label>`).join('');
+}
+
 async function renderEmployeesView() {
   const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  const settings = await getSettingsOnce();
+  APP.allEmployees = [];
+
   main.innerHTML = `
-    <div class="card">
-      <h2>➕ إضافة موظف جديد</h2>
-      <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية — لن يُقبَل الحفظ إلا بعد تعبئتها كاملة، لضمان عدم نسيان أي بيانات مهمة (خصوصاً تحديد الدور)</p>
+    <div class="card" id="empFormCard">
+      <h2 id="empFormTitle">➕ إضافة موظف جديد</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">* كل الحقول إجبارية لضمان عدم نسيان أي بيانات مهمة</p>
       <form id="addEmpForm">
+        <input type="hidden" id="emp_editId" value="">
         <div class="field"><label>الاسم بالعربي *</label><input id="emp_nameAr" type="text" required></div>
-        <div class="field"><label>الاسم بالإنجليزي *</label><input id="emp_nameEn" type="text" required></div>
-        <div class="field"><label>رقم الهوية/الإقامة/الجواز *</label><input id="emp_nationalId" type="text" maxlength="20" required></div>
-        <div class="field"><label>نوع المستخدم *</label><input id="emp_userType" type="text" placeholder="مثال: teacher" required></div>
+        <div class="field"><label>الاسم بالإنجليزي * <span style="font-weight:400;color:#888;font-size:11.5px">(تحويل تقريبي تلقائي، يمكن تعديله)</span></label><input id="emp_nameEn" type="text" required></div>
+        <div class="field" id="emp_nationalIdField"><label>رقم الهوية/الإقامة/الجواز *</label><input id="emp_nationalId" type="text" maxlength="20" required></div>
+        <div class="field"><label>نوع المستخدم *</label>
+          <select id="emp_userType" required>
+            <option value="" disabled selected>-- اختر --</option>
+            ${settings.userTypes.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+          </select>
+        </div>
         <div class="field"><label>الدور *</label>
           <select id="emp_role" required>
             <option value="" disabled selected>-- اختر الدور --</option>
@@ -207,72 +258,183 @@ async function renderEmployeesView() {
             <option value="role_branch_monitor">مراقب فروع</option>
           </select>
         </div>
-        <div class="field"><label>الفرع *</label><input id="emp_branch" type="text" required></div>
-        <button type="submit" id="addEmpBtn">إضافة الموظف</button>
+        <div class="filter-card-title">🏢 الفرع/الفروع * (يمكن اختيار أكثر من فرع)</div>
+        <div class="checkbox-list" id="emp_branchesBox">${branchCheckboxesHtml(settings.branches, [], 'emp')}</div>
+
+        <div id="emp_teacherScopeBox" style="display:none">
+          <div class="filter-card-title">📚 نطاق المعلم — الصفوف</div>
+          <div class="checkbox-list" id="emp_gradesBox">${scopeCheckboxesHtml(settings.grades, [], 'emp-grade-cb')}</div>
+          <div class="filter-card-title">🏫 الشعب</div>
+          <div class="checkbox-list" id="emp_sectionsBox">${scopeCheckboxesHtml(settings.sections, [], 'emp-section-cb')}</div>
+          <div class="filter-card-title">📖 المواد</div>
+          <div class="checkbox-list" id="emp_subjectsBox">${scopeCheckboxesHtml(settings.subjects, [], 'emp-subject-cb')}</div>
+        </div>
+
+        <button type="submit" id="addEmpBtn" style="margin-top:14px">إضافة الموظف</button>
+        <button type="button" id="cancelEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
       </form>
     </div>
+
     <div class="card">
       <h3>قائمة الموظفين</h3>
+      <div class="field"><label>🔍 بحث بالاسم أو الدور أو الفرع</label><input id="empSearchInput" type="text"></div>
       <div id="empListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
-  // 🆕 الاستماع لحدث "submit" (لا "click" على الزر) — هذا ما يُفعِّل تحقق
-  // المتصفح التلقائي من خاصية required فعلياً، ويُظهر تنبيهاً بصرياً واضحاً
-  // (تمييز أحمر + رسالة منبثقة) على أي حقل ناقص، بلا أي كود إضافي منّا
-  document.getElementById('addEmpForm').addEventListener('submit', addEmployeeHandler);
+  document.getElementById('emp_role').addEventListener('change', (e) => {
+    document.getElementById('emp_teacherScopeBox').style.display = e.target.value === 'role_teacher' ? 'block' : 'none';
+  });
+
+  document.getElementById('emp_nameAr').addEventListener('blur', () => {
+    const enField = document.getElementById('emp_nameEn');
+    if (!enField.value.trim()) enField.value = transliterateArabicToEnglish(document.getElementById('emp_nameAr').value);
+  });
+
+  document.getElementById('addEmpForm').addEventListener('submit', saveEmployeeHandler);
+  document.getElementById('cancelEditBtn').addEventListener('click', resetEmployeeForm);
+  document.getElementById('empSearchInput').addEventListener('input', renderEmployeesTable);
+
   loadEmployeesList();
 }
 
-async function addEmployeeHandler(e) {
-  e.preventDefault(); // يمنع إعادة تحميل الصفحة الافتراضية، لكن تحقق required حصل بالفعل قبل هذا السطر
+function collectCheckedValues(selector) {
+  return Array.from(document.querySelectorAll(selector)).filter((el) => el.checked).map((el) => el.value);
+}
+
+function resetEmployeeForm() {
+  document.getElementById('addEmpForm').reset();
+  document.getElementById('emp_editId').value = '';
+  document.getElementById('emp_nationalIdField').style.display = 'block';
+  document.getElementById('emp_teacherScopeBox').style.display = 'none';
+  document.getElementById('empFormTitle').textContent = '➕ إضافة موظف جديد';
+  document.getElementById('addEmpBtn').textContent = 'إضافة الموظف';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+  document.querySelectorAll('.emp-branch-cb, .emp-grade-cb, .emp-section-cb, .emp-subject-cb').forEach((cb) => { cb.checked = false; });
+}
+
+function startEditEmployee(emp) {
+  document.getElementById('emp_editId').value = emp.id;
+  document.getElementById('emp_nameAr').value = emp.name_ar;
+  document.getElementById('emp_nameEn').value = emp.name_en || '';
+  document.getElementById('emp_nationalIdField').style.display = 'none'; // لا يُعدَّل رقم الهوية
+  document.getElementById('emp_userType').value = emp.user_type;
+  document.getElementById('emp_role').value = emp.role;
+  document.getElementById('emp_teacherScopeBox').style.display = emp.role === 'role_teacher' ? 'block' : 'none';
+
+  document.querySelectorAll('.emp-branch-cb').forEach((cb) => { cb.checked = emp.all_branches.includes(cb.value); });
+  document.querySelectorAll('.emp-grade-cb').forEach((cb) => { cb.checked = (emp.grades || []).includes(cb.value); });
+  document.querySelectorAll('.emp-section-cb').forEach((cb) => { cb.checked = (emp.sections || []).includes(cb.value); });
+  document.querySelectorAll('.emp-subject-cb').forEach((cb) => { cb.checked = (emp.subjects || []).includes(cb.value); });
+
+  document.getElementById('empFormTitle').textContent = '✏️ تعديل بيانات: ' + emp.name_ar;
+  document.getElementById('addEmpBtn').textContent = 'حفظ التعديلات';
+  document.getElementById('cancelEditBtn').style.display = 'inline-block';
+  document.getElementById('empFormCard').scrollIntoView({ behavior: 'smooth' });
+}
+
+async function saveEmployeeHandler(e) {
+  e.preventDefault();
+  const editId = document.getElementById('emp_editId').value;
   const btn = document.getElementById('addEmpBtn');
-  btn.disabled = true; btn.textContent = 'جارِ الإضافة...';
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+
+  const branches = collectCheckedValues('.emp-branch-cb');
+  if (!branches.length) { showToast('اختر فرعاً واحداً على الأقل', 'error'); btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'إضافة الموظف'; return; }
+
+  const body = {
+    nameAr: document.getElementById('emp_nameAr').value.trim(),
+    nameEn: document.getElementById('emp_nameEn').value.trim(),
+    userType: document.getElementById('emp_userType').value,
+    role: document.getElementById('emp_role').value,
+    branches,
+    grades: collectCheckedValues('.emp-grade-cb'),
+    sections: collectCheckedValues('.emp-section-cb'),
+    subjects: collectCheckedValues('.emp-subject-cb'),
+  };
+  if (!editId) body.nationalId = document.getElementById('emp_nationalId').value.trim();
+
   try {
-    await apiCall('add-employee', {
-      method: 'POST',
-      body: {
-        nameAr: document.getElementById('emp_nameAr').value.trim(),
-        nameEn: document.getElementById('emp_nameEn').value.trim(),
-        nationalId: document.getElementById('emp_nationalId').value.trim(),
-        userType: document.getElementById('emp_userType').value.trim(),
-        role: document.getElementById('emp_role').value,
-        branch: document.getElementById('emp_branch').value.trim(),
-        grades: [], sections: [], subjects: [],
-      },
-    });
-    showToast('تم إضافة الموظف بنجاح — كلمة المرور المبدئية هي رقم الهوية', 'success');
-    ['emp_nameAr', 'emp_nameEn', 'emp_nationalId', 'emp_userType', 'emp_role', 'emp_branch'].forEach((id) => { document.getElementById(id).value = ''; });
+    if (editId) {
+      await apiCall('update-employee', { method: 'POST', body: { id: editId, ...body } });
+      showToast('تم تحديث بيانات الموظف بنجاح', 'success');
+    } else {
+      await apiCall('add-employee', { method: 'POST', body });
+      showToast('تم إضافة الموظف بنجاح — كلمة المرور المبدئية هي رقم الهوية', 'success');
+    }
+    resetEmployeeForm();
     loadEmployeesList();
-  } catch (e) {
-    showToast(e.message, 'error');
+  } catch (err) {
+    showToast(err.message, 'error');
   } finally {
-    btn.disabled = false; btn.textContent = 'إضافة الموظف';
+    btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'إضافة الموظف';
   }
 }
 
 async function loadEmployeesList() {
   const area = document.getElementById('empListArea');
   try {
-    const employees = await apiCall('list-employees', { method: 'GET' });
-    if (!employees.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفون بعد</p>'; return; }
-    area.innerHTML = `
-      <table style="width:100%;border-collapse:collapse">
-        <thead><tr style="text-align:right;border-bottom:2px solid #eee">
-          <th style="padding:8px">الرقم</th><th style="padding:8px">الاسم</th><th style="padding:8px">الدور</th><th style="padding:8px">الفرع</th>
-        </tr></thead>
-        <tbody>
-          ${employees.map((e) => `
-            <tr style="border-bottom:1px solid #f0f0f0">
-              <td style="padding:8px">${escapeHtml(e.id)}</td>
-              <td style="padding:8px">${escapeHtml(e.name_ar)}</td>
-              <td style="padding:8px">${escapeHtml(e.role)}</td>
-              <td style="padding:8px">${escapeHtml(e.branch)}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
+    APP.allEmployees = await apiCall('list-employees', { method: 'GET' });
+    renderEmployeesTable();
   } catch (e) {
     area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
   }
+}
+
+const ROLE_LABELS_AR = {
+  role_admin: 'أدمن', role_teacher: 'معلم', role_teacher_sup: 'مشرف معلمين',
+  role_student_sup: 'مشرف طلاب', Admission: 'إدارة القبول والتسجيل', role_branch_monitor: 'مراقب فروع',
+};
+
+function renderEmployeesTable() {
+  const area = document.getElementById('empListArea');
+  const q = (document.getElementById('empSearchInput').value || '').trim().toLowerCase();
+  const list = APP.allEmployees.filter((e) => {
+    if (!q) return true;
+    return e.name_ar.toLowerCase().includes(q) ||
+      (ROLE_LABELS_AR[e.role] || e.role).toLowerCase().includes(q) ||
+      e.all_branches.some((b) => b.toLowerCase().includes(q));
+  });
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفون مطابقون</p>'; return; }
+
+  area.innerHTML = `
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="text-align:right;border-bottom:2px solid #eee">
+        <th style="padding:8px">الاسم</th><th style="padding:8px">الدور</th><th style="padding:8px">الفروع</th><th style="padding:8px"></th>
+      </tr></thead>
+      <tbody>
+        ${list.map((e) => `
+          <tr style="border-bottom:1px solid #f0f0f0">
+            <td style="padding:8px">${escapeHtml(e.name_ar)}</td>
+            <td style="padding:8px">${escapeHtml(ROLE_LABELS_AR[e.role] || e.role)}</td>
+            <td style="padding:8px">${escapeHtml(e.all_branches.join('، '))}</td>
+            <td style="padding:8px;white-space:nowrap">
+              <button type="button" class="btn-edit-emp" data-id="${escapeHtml(e.id)}">✏️</button>
+              <button type="button" class="btn-del-emp" data-id="${escapeHtml(e.id)}" data-name="${escapeHtml(e.name_ar)}" style="background:#c62828">🗑️</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>`;
+
+  area.querySelectorAll('.btn-edit-emp').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const emp = APP.allEmployees.find((e) => e.id === btn.getAttribute('data-id'));
+      if (emp) startEditEmployee(emp);
+    });
+  });
+  area.querySelectorAll('.btn-del-emp').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
+      try {
+        await apiCall('delete-employee', { method: 'POST', body: { id: btn.getAttribute('data-id') } });
+        showToast('تم الحذف بنجاح', 'success');
+        loadEmployeesList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
