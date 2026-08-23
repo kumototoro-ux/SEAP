@@ -154,10 +154,36 @@ button:disabled { opacity: .5; cursor: wait; }
 .btn-toggle-form:hover { background: var(--accent-green); border-color: var(--accent-green); }
 
 /* ---------- جداول ---------- */
-.table-scroll-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.table-scroll-wrap table { min-width: 500px; }
-table th { color: var(--text-muted); font-weight: 700; font-size: 12.5px; }
-table td { font-size: 13.5px; }
+/* ---------- 🆕 نظام بطاقات الأشخاص — شبكة متجاوبة حقيقية، بلا أي خدعة تحويل جدول ---------- */
+.person-card-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px;
+}
+.person-card {
+  background: var(--surface-card); border: 1px solid var(--outline); border-radius: var(--radius);
+  padding: 16px; display: flex; flex-direction: column; gap: 12px;
+}
+.person-card-header { display: flex; align-items: center; gap: 12px; }
+.person-avatar {
+  width: 44px; height: 44px; border-radius: 50%; background: var(--accent-purple); color: var(--primary);
+  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 16px; flex-shrink: 0;
+}
+.person-card-info { flex: 1; min-width: 0; }
+.person-card-name { font-weight: 800; font-size: 14.5px; color: var(--primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.person-card-role { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.person-card-body { border-top: 1px solid var(--surface); padding-top: 10px; }
+.person-card-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; margin-bottom: 4px; }
+.person-card-row span:first-child { color: var(--text-muted); }
+.person-card-row span:last-child { color: var(--primary); font-weight: 600; text-align: left; }
+.person-card-footer { border-top: 1px solid var(--surface); padding-top: 10px; }
+.person-card-actions { display: flex; gap: 8px; } /* 🆕 gap صغير وثابت — الأزرار مجمَّعة قريبة من بعضها دائماً، لا مسافات عشوائية */
+.person-card-actions button { flex: 1; justify-content: center; }
+
+.status-badge {
+  display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; flex-shrink: 0;
+}
+.status-badge-on { background: #E7F5EC; color: #2F7A4D; }
+.status-badge-off { background: #FBEAE8; color: #C4483A; }
 
 /* ---------- استجابة الجوال ---------- */
 .sidebar-overlay {
@@ -185,23 +211,8 @@ table td { font-size: 13.5px; }
   .header-actions { gap: 6px; }
   .header-brand-mobile { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; color: var(--primary); }
 
-  /* 🆕 كل جدول يتحوّل لبطاقات مكدَّسة بالجوال — لا مزيد من التمرير الأفقي المزعج */
-  .table-scroll-wrap { overflow-x: visible; }
-  .table-scroll-wrap table { min-width: 0; width: 100%; }
-  .table-scroll-wrap table thead { display: none; }
-  .table-scroll-wrap table, .table-scroll-wrap tbody, .table-scroll-wrap tr, .table-scroll-wrap td { display: block; width: 100%; }
-  .table-scroll-wrap tr {
-    background: var(--surface-card); border: 1px solid var(--outline); border-radius: var(--radius-sm);
-    margin-bottom: 12px; padding: 10px 14px;
-  }
-  .table-scroll-wrap td {
-    display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    padding: 8px 0 !important; border-bottom: 1px solid var(--surface); text-align: left;
-  }
-  .table-scroll-wrap td:last-child { border-bottom: none; }
-  .table-scroll-wrap td::before {
-    content: attr(data-label); font-weight: 700; color: var(--text-muted); font-size: 12px; flex-shrink: 0;
-  }
+  /* 🆕 البطاقات تصبح عموداً واحداً بالجوال تلقائياً (نفس .person-card-grid، grid يتكيّف بنفسه) */
+  .person-card-grid { grid-template-columns: 1fr; }
 }
 
 /* 🆕 الشعار المصغَّر بالشريط العلوي مخفي بسطح المكتب دائماً (يظهر بالقائمة الجانبية هناك أصلاً) */
