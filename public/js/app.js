@@ -133,7 +133,10 @@ function renderShell() {
     <div class="app-body">
       <div class="sidebar-overlay" id="sidebarOverlay"></div>
       <aside class="sidebar" id="sidebar">
-        <div class="sidebar-brand">${mirqatLogo(30)}<span>مِرقاة</span></div>
+        <div class="sidebar-brand">
+          ${mirqatLogo(30)}<span class="brand-text">مِرقاة</span>
+          <button type="button" class="sidebar-collapse-btn" id="sidebarCollapseBtn">${ICONS.chevronDown()}</button>
+        </div>
         <nav id="sidebarNav"></nav>
       </aside>
       <div class="app-main-col">
@@ -141,7 +144,7 @@ function renderShell() {
           <button class="menu-toggle-btn" id="menuToggle">${ICONS.menu()}</button>
           <div class="header-search">
             ${ICONS.search()}
-            <input type="text" placeholder="بحث..." disabled>
+            <input type="text" placeholder="بحث..." id="globalSearchInput">
             <span class="header-search-kbd">⌘K</span>
           </div>
           <div class="header-actions">
@@ -162,7 +165,7 @@ function renderShell() {
 
   const pages = pagesForCurrentUser();
   document.getElementById('sidebarNav').innerHTML = pages
-    .map((key) => `<a data-view="${key}">${ICONS[PAGE_REGISTRY[key].icon]()}<span>${PAGE_REGISTRY[key].label}</span></a>`)
+    .map((key) => `<a data-view="${key}" title="${PAGE_REGISTRY[key].label}">${ICONS[PAGE_REGISTRY[key].icon]()}<span>${PAGE_REGISTRY[key].label}</span></a>`)
     .join('');
 
   document.querySelectorAll('#sidebarNav a').forEach((a) => {
@@ -177,6 +180,15 @@ function renderShell() {
     document.getElementById('sidebarOverlay').classList.toggle('show', isOpen);
   });
   document.getElementById('sidebarOverlay').addEventListener('click', closeSidebarMobile);
+
+  // 🆕 طيّ الشريط الجانبي (أيقونات فقط) — يُحفَظ الاختيار بالمتصفح، يعمل على سطح المكتب فقط (الجوال له سلوك منفصل)
+  const collapseBtn = document.getElementById('sidebarCollapseBtn');
+  const sidebarEl = document.getElementById('sidebar');
+  if (localStorage.getItem('mirqat_sidebar_collapsed') === 'true') sidebarEl.classList.add('collapsed');
+  collapseBtn.addEventListener('click', () => {
+    const isCollapsed = sidebarEl.classList.toggle('collapsed');
+    localStorage.setItem('mirqat_sidebar_collapsed', isCollapsed);
+  });
 
   // 🆕 قائمة المستخدم المنسدلة (بديل زر الخروج المنفصل — مطابق للتصميم المرجعي)
   document.getElementById('userMenuBtn').addEventListener('click', (e) => {
