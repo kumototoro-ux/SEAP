@@ -11,14 +11,12 @@ const APP = { token: null, user: null };
 /** 🆕 سجل الصفحات المركزي — أي صفحة قادمة (الموظفون، الطلاب...) تُضاف هنا فقط */
 const PAGE_REGISTRY = {
   home: { label: '🏠 الرئيسية', render: renderHomeView },
-  // 🆕 مثال جاهز للاستخدام لاحقاً:
-  // employees: { label: '👩‍🏫 الموظفون', render: renderEmployeesView },
+  employees: { label: '👩‍🏫 الموظفون', render: renderEmployeesView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home'],
-  // 🆕 أدوار قادمة تُضاف هنا فقط: role_teacher_sup: ['home', ...], إلخ
+  role_admin: ['home', 'employees'],
 };
 
 function pagesForCurrentUser() {
@@ -183,6 +181,79 @@ function renderHomeView() {
       <h2>أهلاً، ${escapeHtml(APP.user.fullName)} 👋</h2>
       <p style="color:#666">${escapeHtml(APP.user.role)} — ${escapeHtml(APP.user.branch)}</p>
     </div>`;
+}
+
+/* ===================== صفحة الموظفين ===================== */
+
+async function renderEmployeesView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2>➕ إضافة موظف جديد</h2>
+      <div class="field"><label>الاسم بالعربي</label><input id="emp_nameAr" type="text"></div>
+      <div class="field"><label>رقم الهوية (10 أرقام)</label><input id="emp_nationalId" type="text" maxlength="10"></div>
+      <div class="field"><label>نوع المستخدم</label><input id="emp_userType" type="text" placeholder="مثال: teacher"></div>
+      <div class="field"><label>الدور</label><input id="emp_role" type="text" placeholder="مثال: role_teacher"></div>
+      <div class="field"><label>الفرع</label><input id="emp_branch" type="text"></div>
+      <button id="addEmpBtn">إضافة الموظف</button>
+    </div>
+    <div class="card">
+      <h3>قائمة الموظفين</h3>
+      <div id="empListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('addEmpBtn').addEventListener('click', addEmployeeHandler);
+  loadEmployeesList();
+}
+
+async function addEmployeeHandler() {
+  const btn = document.getElementById('addEmpBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الإضافة...';
+  try {
+    await apiCall('add-employee', {
+      method: 'POST',
+      body: {
+        nameAr: document.getElementById('emp_nameAr').value.trim(),
+        nationalId: document.getElementById('emp_nationalId').value.trim(),
+        userType: document.getElementById('emp_userType').value.trim(),
+        role: document.getElementById('emp_role').value.trim(),
+        branch: document.getElementById('emp_branch').value.trim(),
+        grades: [], sections: [], subjects: [],
+      },
+    });
+    showToast('تم إضافة الموظف بنجاح — كلمة المرور المبدئية هي رقم الهوية', 'success');
+    ['emp_nameAr', 'emp_nationalId', 'emp_userType', 'emp_role', 'emp_branch'].forEach((id) => { document.getElementById(id).value = ''; });
+    loadEmployeesList();
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'إضافة الموظف';
+  }
+}
+
+async function loadEmployeesList() {
+  const area = document.getElementById('empListArea');
+  try {
+    const employees = await apiCall('list-employees', { method: 'GET' });
+    if (!employees.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفون بعد</p>'; return; }
+    area.innerHTML = `
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="text-align:right;border-bottom:2px solid #eee">
+          <th style="padding:8px">الرقم</th><th style="padding:8px">الاسم</th><th style="padding:8px">الدور</th><th style="padding:8px">الفرع</th>
+        </tr></thead>
+        <tbody>
+          ${employees.map((e) => `
+            <tr style="border-bottom:1px solid #f0f0f0">
+              <td style="padding:8px">${escapeHtml(e.id)}</td>
+              <td style="padding:8px">${escapeHtml(e.name_ar)}</td>
+              <td style="padding:8px">${escapeHtml(e.role)}</td>
+              <td style="padding:8px">${escapeHtml(e.branch)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (e) {
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+  }
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
