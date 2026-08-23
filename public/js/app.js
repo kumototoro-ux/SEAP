@@ -103,6 +103,7 @@ function renderForceChangePassword() {
 }
 
 async function doLogout() {
+  document.getElementById('detailModalOverlay')?.remove(); // 🆕 حماية عامة — يزيل أي نافذة منبثقة عالقة قبل شاشة الدخول
   try { await apiCall('auth', { method: 'POST', body: { action: 'logout' } }); } catch (e) { /* لا يهم فشل الطلب، نمسح محلياً بأي حال */ }
   localStorage.removeItem('mirqat_token');
   localStorage.removeItem('mirqat_user');
@@ -967,7 +968,10 @@ function openMyProfileModal() {
     <button type="button" id="modalLogoutBtn" class="btn-danger-outline btn-outline-sm" style="width:100%;justify-content:center">${ICONS.logout()} تسجيل الخروج</button>
   `);
 
-  document.getElementById('modalLogoutBtn').addEventListener('click', doLogout);
+  document.getElementById('modalLogoutBtn').addEventListener('click', () => {
+    overlay.remove(); // 🆕 يزيل البطاقة صراحةً أولاً — تمنع بقاءها عالقة فوق شاشة الدخول الجديدة
+    doLogout();
+  });
   document.getElementById('openChangePasswordBtn').addEventListener('click', () => {
     const body = document.getElementById('modalBodyContent');
     body.innerHTML = `
