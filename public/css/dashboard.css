@@ -56,7 +56,7 @@ body {
 
 .sidebar {
   width: 240px; background: var(--surface-card); padding: 20px 14px; flex-shrink: 0;
-  border-left: 1px solid var(--outline);
+  border-left: 1px solid var(--outline); transition: width .2s ease;
 }
 .sidebar nav a {
   display: flex; align-items: center; gap: 10px;
@@ -74,9 +74,13 @@ body {
 /* ---------- بطاقة عامة ---------- */
 .card {
   background: var(--surface-card); border-radius: var(--radius); padding: 22px; margin-bottom: 18px;
-  box-shadow: var(--shadow-1); border: 1px solid var(--outline);
+  box-shadow: var(--shadow-1); border: 1px solid var(--outline); overflow-wrap: break-word; word-break: break-word;
 }
-.card h2, .card h3 { margin-top: 0; color: var(--primary); font-weight: 800; }
+.card h2, .card h3 { margin-top: 0; color: var(--primary); font-weight: 800; overflow-wrap: break-word; }
+.app-header-title, .app-header { min-width: 0; }
+.app-header > * { min-width: 0; }
+.header-user { min-width: 0; }
+.user-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 130px; }
 
 /* ---------- شريط التقدّم العلوي ---------- */
 #progress-bar {
@@ -165,14 +169,34 @@ table td { font-size: 13.5px; }
 @media (max-width: 860px) {
   .menu-toggle-btn { display: flex; }
   .sidebar {
-    position: fixed; top: 0; bottom: 0; right: 0; width: 78vw; max-width: 280px;
+    position: fixed !important; top: 0; bottom: 0; right: 0; width: 78vw; max-width: 280px;
     z-index: 40; transform: translateX(105%); transition: transform .25s ease;
     overflow-y: auto; box-shadow: var(--shadow-2);
   }
   .sidebar.open { transform: translateX(0); }
-  .main-content { padding: 18px; }
-  .header-search { display: none; }
+  .sidebar.collapsed { width: 78vw; max-width: 280px; } /* 🆕 الطيّ يُعطَّل بالجوال — لا فائدة منه بقائمة منسدلة أصلاً */
+  .sidebar.collapsed nav a span, .sidebar.collapsed .brand-text { display: inline !important; }
+  .sidebar-collapse-btn { display: none; } /* 🆕 زر الطيّ مخصَّص لسطح المكتب فقط */
+
+  .main-content { padding: 16px; }
+  .header-search { display: none; } /* 🆕 يختفي بالجوال — لا مساحة كافية */
+  .user-name { display: none; } /* 🆕 يبقى الأفاتار فقط، يوفّر مساحة حرجة */
+  .app-header { padding: 12px 14px; gap: 8px; }
+  .header-actions { gap: 6px; }
 }
+
+/* ---------- 🆕 طيّ الشريط الجانبي (أيقونات فقط) — سطح المكتب فقط ---------- */
+.sidebar-collapse-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer; padding: 4px;
+  margin-right: auto; transform: rotate(90deg); transition: transform .2s ease;
+}
+.sidebar.collapsed .sidebar-collapse-btn { transform: rotate(-90deg); }
+.sidebar.collapsed { width: 76px; padding: 20px 10px; }
+.sidebar.collapsed .brand-text,
+.sidebar.collapsed nav a span { display: none; }
+.sidebar.collapsed .sidebar-brand { justify-content: center; }
+.sidebar.collapsed .sidebar-collapse-btn { margin: 0; }
+.sidebar.collapsed nav a { justify-content: center; padding: 12px; }
 
 /* ---------- 🆕 شعار واسم المنصة أعلى الشريط الجانبي ---------- */
 .sidebar-brand {
