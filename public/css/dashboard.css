@@ -35,9 +35,9 @@ body {
 }
 .app-header-title { font-weight: 800; font-size: 17px; flex: 1; }
 .menu-toggle-btn {
-  display: none; background: var(--surface); border: none; color: var(--primary);
+  display: flex; background: var(--surface); border: none; color: var(--primary);
   width: 38px; height: 38px; border-radius: var(--radius-sm); font-size: 18px; cursor: pointer;
-  align-items: center; justify-content: center;
+  align-items: center; justify-content: center; flex-shrink: 0;
 }
 .header-user { display: flex; align-items: center; gap: 10px; }
 .user-avatar {
@@ -164,9 +164,9 @@ table td { font-size: 13.5px; }
   display: none; position: fixed; inset: 0; background: rgba(32,33,36,.35);
   z-index: 39; opacity: 0; transition: opacity .2s ease; pointer-events: none;
 }
-.sidebar-overlay.show { display: block; opacity: 1; pointer-events: auto; }
 
 @media (max-width: 860px) {
+  .sidebar-overlay.show { display: block; opacity: 1; pointer-events: auto; } /* 🆕 مقيَّد بالجوال فقط الآن */
   .menu-toggle-btn { display: flex; }
   .sidebar {
     position: fixed !important; top: 0; bottom: 0; right: 0; width: 78vw; max-width: 280px;
