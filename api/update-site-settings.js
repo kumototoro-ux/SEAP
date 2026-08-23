@@ -34,3 +34,4 @@ export default apiHandler(async function updateSiteSettings(req, res) {
 
   return res.status(200).json({ success: true, data: true });
 });
+

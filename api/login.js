@@ -77,3 +77,4 @@ export default apiHandler(async function login(req, res) {
     data: { token, user: userPayload, firstLogin: isFirstLogin },
   });
 });
+

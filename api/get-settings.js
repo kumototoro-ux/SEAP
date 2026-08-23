@@ -56,3 +56,4 @@ export default apiHandler(async function getSettings(req, res) {
     },
   });
 });
+
