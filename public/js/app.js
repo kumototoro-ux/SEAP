@@ -149,7 +149,7 @@ function renderShell() {
             <span class="header-search-kbd">⌘K</span>
           </div>
           <div class="header-actions">
-            <button class="header-icon-btn" id="notifBtn">${ICONS.bell()}</button>
+            <button class="header-icon-btn" id="notifBtn">${ICONS.bell()}<span class="notif-badge" id="notifBadge" style="display:none"></span></button>
             <div class="header-user" id="userMenuBtn">
               <span class="user-avatar">${initials}</span>
               <span class="user-name">${escapeHtml(APP.user.fullName)}</span>
@@ -492,7 +492,7 @@ function renderEmployeesTable() {
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد موظفون مطابقون</p>'; return; }
 
   area.innerHTML = `<div class="person-card-grid">${list.map((e) => `
-    <div class="person-card">
+    <div class="person-card" data-id="${escapeHtml(e.id)}" data-card-clickable>
       <div class="person-card-header">
         <span class="person-avatar">${escapeHtml((e.name_ar || '؟').trim().charAt(0))}</span>
         <div class="person-card-info">
@@ -511,14 +511,38 @@ function renderEmployeesTable() {
       </div>
     </div>`).join('')}</div>`;
 
+  // 🆕 الضغط على أي مكان بالبطاقة (بخلاف الأزرار) يفتح نافذة التفاصيل والصلاحيات
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const emp = APP.allEmployees.find((x) => x.id === card.getAttribute('data-id'));
+      if (!emp) return;
+      showDetailModal(emp.name_ar, ROLE_LABELS_AR[emp.role] || emp.role, [
+        { label: 'الاسم بالإنجليزي', value: emp.name_en },
+        { label: 'رقم الهوية/الإقامة', value: emp.national_id },
+        { label: 'نوع المستخدم', value: emp.user_type },
+        { label: 'الدور (الصلاحية)', value: ROLE_LABELS_AR[emp.role] || emp.role },
+        { label: 'الفروع', value: emp.all_branches.join('، ') },
+        { label: 'المرحلة', value: emp.stage },
+        { label: 'الجنس', value: emp.gender },
+        ...(emp.role === 'role_teacher' ? [
+          { label: 'الصفوف', value: (emp.grades || []).join('، ') },
+          { label: 'الشعب', value: (emp.sections || []).join('، ') },
+          { label: 'المواد', value: (emp.subjects || []).join('، ') },
+        ] : []),
+      ]);
+    });
+  });
+
   area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
       const emp = APP.allEmployees.find((e) => e.id === btn.getAttribute('data-id'));
       if (emp) startEditEmployee(emp);
     });
   });
   area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
       const name = btn.getAttribute('data-name');
       if (!confirm(`تأكيد حذف الموظف "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
       try {
@@ -702,7 +726,7 @@ function renderStudentsTable() {
   if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
 
   area.innerHTML = `<div class="person-card-grid">${list.map((s) => `
-    <div class="person-card">
+    <div class="person-card" data-id="${escapeHtml(s.id)}" data-card-clickable>
       <div class="person-card-header">
         <span class="person-avatar">${escapeHtml((s.name_ar || '؟').trim().charAt(0))}</span>
         <div class="person-card-info">
@@ -721,14 +745,36 @@ function renderStudentsTable() {
       </div>
     </div>`).join('')}</div>`;
 
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const stu = APP.allStudents.find((x) => x.id === card.getAttribute('data-id'));
+      if (!stu) return;
+      showDetailModal(stu.name_ar, `${stu.grade} — ${stu.section}`, [
+        { label: 'الاسم بالإنجليزي', value: stu.name_en },
+        { label: 'رقم الهوية/الإقامة', value: stu.national_id },
+        { label: 'الجنسية', value: stu.nationality },
+        { label: 'تاريخ الميلاد', value: stu.date_of_birth },
+        { label: 'الجنس', value: stu.gender },
+        { label: 'الفرع', value: stu.branch },
+        { label: 'المرحلة', value: stu.stage },
+        { label: 'الصف', value: stu.grade },
+        { label: 'الشعبة', value: stu.section },
+        { label: 'المواد', value: (stu.subjects || []).join('، ') },
+        { label: 'حالة الرسوم', value: stu.fee_status },
+      ]);
+    });
+  });
+
   area.querySelectorAll('.btn-icon-edit').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
       const stu = APP.allStudents.find((s) => s.id === btn.getAttribute('data-id'));
       if (stu) startEditStudent(stu);
     });
   });
   area.querySelectorAll('.btn-icon-delete').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
       const name = btn.getAttribute('data-name');
       if (!confirm(`تأكيد حذف الطالب "${name}"؟ سيُحذَف حساب دخوله تلقائياً معه.`)) return;
       try {
@@ -777,7 +823,7 @@ function renderUsersTable() {
   area.innerHTML = `<div class="person-card-grid">${list.map((u) => {
     const isActive = u.status === 'active';
     return `
-    <div class="person-card">
+    <div class="person-card" data-id="${escapeHtml(u.id)}" data-card-clickable>
       <div class="person-card-header">
         <span class="person-avatar">${escapeHtml((u.nameAr || '؟').trim().charAt(0))}</span>
         <div class="person-card-info">
@@ -802,8 +848,23 @@ function renderUsersTable() {
     </div>`;
   }).join('')}</div>`;
 
+  area.querySelectorAll('[data-card-clickable]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const u = APP.allUsers.find((x) => x.id === card.getAttribute('data-id'));
+      if (!u) return;
+      showDetailModal(u.nameAr, ROLE_LABELS_AR[u.role] || u.role || '—', [
+        { label: 'اسم المستخدم', value: u.username },
+        { label: 'الدور (الصلاحية)', value: ROLE_LABELS_AR[u.role] || u.role },
+        { label: 'الفرع', value: u.branch },
+        { label: 'حالة الحساب', value: u.status === 'active' ? 'مفعَّل' : 'معطَّل' },
+        { label: 'تاريخ الإنشاء', value: u.createdAt ? new Date(u.createdAt).toLocaleDateString('ar') : null },
+      ]);
+    });
+  });
+
   area.querySelectorAll('[data-new-status]').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
       const newStatus = btn.getAttribute('data-new-status');
       if (!confirm(newStatus === 'active' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
       try {
@@ -817,7 +878,8 @@ function renderUsersTable() {
   });
 
   area.querySelectorAll('.btn-reset-pass').forEach((btn) => {
-    btn.addEventListener('click', async () => {
+    btn.addEventListener('click', async (evt) => {
+      evt.stopPropagation();
       const name = btn.getAttribute('data-name');
       if (!confirm(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`)) return;
       try {
@@ -846,6 +908,43 @@ function wireFormToggle(toggleBtnId, formCardId, defaultLabel) {
     btn.innerHTML = isHidden ? `${ICONS.close()} إغلاق النموذج` : defaultLabel;
     if (isHidden) card.scrollIntoView({ behavior: 'smooth' });
   });
+}
+
+/**
+ * 🆕 نافذة تفاصيل عامة (Modal) — تعرض معلومات وصلاحيات أي شخص (موظف/طالب/مستخدم)
+ * بشكل موحَّد. تُستخدَم بكل صفحات الأشخاص الثلاث، بلا أي تكرار كود.
+ */
+function showDetailModal(title, subtitle, rows) {
+  const existing = document.getElementById('detailModalOverlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'detailModalOverlay';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h3>${escapeHtml(title)}</h3>
+          ${subtitle ? `<p class="modal-subtitle">${escapeHtml(subtitle)}</p>` : ''}
+        </div>
+        <button type="button" class="modal-close-btn" id="modalCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        ${rows.map((r) => `
+          <div class="modal-detail-row">
+            <span class="modal-detail-label">${escapeHtml(r.label)}</span>
+            <span class="modal-detail-value">${r.value ? escapeHtml(r.value) : '<span style="color:#bbb">—</span>'}</span>
+          </div>`).join('')}
+      </div>
+    </div>`;
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('show'));
+
+  const close = () => { overlay.classList.remove('show'); setTimeout(() => overlay.remove(), 200); };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('modalCloseBtn').addEventListener('click', close);
 }
 
 function escapeHtml(str) {
