@@ -141,8 +141,10 @@ function renderShell() {
       </aside>
       <div class="app-main-col">
         <div class="app-header">
-          <button class="menu-toggle-btn" id="menuToggle">☰</button>
-          <div class="header-brand-mobile">${mirqatLogo(24)}<span>مِرقاة</span></div>
+          <div class="header-start">
+            <button class="menu-toggle-btn" id="menuToggle">☰</button>
+            <div class="header-brand-mobile">${mirqatLogo(24)}<span>مِرقاة</span></div>
+          </div>
           <div class="header-search">
             ${ICONS.search()}
             <input type="text" placeholder="بحث..." id="globalSearchInput">
@@ -155,6 +157,10 @@ function renderShell() {
               <span class="user-name">${escapeHtml(APP.user.fullName)}</span>
               ${ICONS.chevronDown()}
               <div class="user-dropdown" id="userDropdown">
+                <div class="user-dropdown-info">
+                  <div class="user-dropdown-name">${escapeHtml(APP.user.fullName)}</div>
+                  <div class="user-dropdown-role">${escapeHtml(ROLE_LABELS_AR[APP.user.role] || APP.user.role)} — ${escapeHtml(APP.user.branch)}</div>
+                </div>
                 <button type="button" id="logoutBtn">${ICONS.logout()} تسجيل الخروج</button>
               </div>
             </div>
@@ -216,6 +222,8 @@ function renderShell() {
     if (searchBox) searchBox.style.display = isMobile ? 'none' : 'flex';
     const bottomNavEl = document.getElementById('bottomNav');
     if (bottomNavEl) bottomNavEl.style.display = isMobile ? 'flex' : 'none';
+    const menuBtn = document.getElementById('menuToggle');
+    if (menuBtn) menuBtn.style.display = isMobile ? 'flex' : 'none'; // 🆕 مخفي بسطح المكتب بشكل مؤكَّد — القائمة الجانبية ظاهرة أصلاً هناك
   }
   applyResponsiveJS();
   window.addEventListener('resize', applyResponsiveJS);
