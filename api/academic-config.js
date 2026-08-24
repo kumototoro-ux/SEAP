@@ -13,7 +13,8 @@ import { validateBody, addMatrixEntriesSchema, saveGradeDistForSubjectSchema } f
 
 /* -------------------- مصفوفة توزيع المواد -------------------- */
 async function handleListMatrix(req, res) {
-  requireAuth(req);
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']); // 🆕 كان مفقوداً — نفس نمط الثغرة السابقة
   const { data, error } = await supabaseAdmin.from('subject_distribution_matrix').select('*').order('branch');
   if (error) throw error;
   return res.status(200).json({ success: true, data });
@@ -60,7 +61,8 @@ async function handleDeleteMatrixEntry(req, res) {
 
 /* -------------------- توزيع الدرجات -------------------- */
 async function handleListGradeDist(req, res) {
-  requireAuth(req);
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']); // 🆕 كان مفقوداً — نفس نمط الثغرة السابقة
   const { data, error } = await supabaseAdmin.from('grade_distribution').select('*').order('subject');
   if (error) throw error;
   return res.status(200).json({ success: true, data });
