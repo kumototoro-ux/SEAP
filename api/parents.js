@@ -18,7 +18,8 @@ const PARENT_MANAGE_ROLES_ = ['role_admin', 'Admission', 'role_student_sup'];
 
 /* -------------------- قائمة أولياء الأمور (مع أسماء أبنائهم) -------------------- */
 async function handleList(req, res) {
-  requireAuth(req);
+  const user = requireAuth(req);
+  requireRole(user, PARENT_MANAGE_ROLES_); // 🆕 كان مفقوداً — نفس الثغرة بالضبط
   const { data, error } = await supabaseAdmin
     .from('parent_info')
     .select('id, national_id, name_ar, name_en, phone, branch, created_at, parent_student_links(relationship, students(id, name_ar))')
