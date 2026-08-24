@@ -2103,7 +2103,7 @@ async function loadBehaviorForStudent() {
         body: {
           action: 'add', studentId: behaviorSelectedStudentId, branch: student.branch,
           type: document.getElementById('beh_type').value,
-          points: Number(document.getElementById('beh_points').value),
+          points: Math.max(1, Number(document.getElementById('beh_points').value) || 1), // 🆕 حماية إضافية — يمنع إرسال قيمة فارغة أو صفر أو غير صالحة مهما حصل بالواجهة
           description,
         },
       });
@@ -2216,35 +2216,56 @@ async function renderPerfMySection(content) {
 
 /* -------------------- تقييم موظف -------------------- */
 async function renderPerfEvaluateSection(content) {
-  const [employees, cycles] = await Promise.all([
-    apiCall('performance', { method: 'POST', body: { action: 'listEvaluatable' } }),
-    apiCall('performance', { method: 'POST', body: { action: 'listCycles' } }),
-  ]);
+  const cycles = await apiCall('performance', { method: 'POST', body: { action: 'listCycles' } });
   const activeCycles = cycles.filter((c) => c.status === 'active');
 
   if (!activeCycles.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا توجد دورة تقييم نشطة حالياً — يجب على الأدمن إنشاء واحدة أولاً.</p></div>'; return; }
-  if (!employees.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا يوجد موظفون ضمن نطاقك للتقييم</p></div>'; return; }
 
   content.innerHTML = `
     <div class="card">
       <h2>تقييم موظف</h2>
-      <div class="field"><label>الموظف</label>
-        <select id="perf_employee"><option value="" disabled selected>-- اختر --</option>${employees.map((e) => `<option value="${escapeHtml(e.id)}" data-branch="${escapeHtml(e.branch)}">${escapeHtml(e.name_ar)}</option>`).join('')}</select>
-      </div>
       <div class="field"><label>دورة التقييم</label>
         <select id="perf_cycle">${activeCycles.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select>
       </div>
-      <button type="button" id="perf_loadFormBtn">تحميل نموذج التقييم</button>
     </div>
+    <div id="perfRosterArea"></div>
     <div id="perfEvalFormBox"></div>`;
 
-  document.getElementById('perf_loadFormBtn').addEventListener('click', async () => {
-    const empSelect = document.getElementById('perf_employee');
-    if (!empSelect.value) { showToast('اختر موظفاً أولاً', 'error'); return; }
-    perfSelectedEmployeeId = empSelect.value;
-    perfSelectedCycleId = document.getElementById('perf_cycle').value;
-    const branch = empSelect.selectedOptions[0].getAttribute('data-branch');
-    await loadEvaluationForm(branch);
+  document.getElementById('perf_cycle').addEventListener('change', loadPerfRoster);
+  loadPerfRoster();
+}
+
+async function loadPerfRoster() {
+  perfSelectedCycleId = document.getElementById('perf_cycle').value;
+  const area = document.getElementById('perfRosterArea');
+  area.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  document.getElementById('perfEvalFormBox').innerHTML = '';
+
+  const roster = await apiCall('performance', { method: 'POST', body: { action: 'listEvaluationsForCycle', cycleId: perfSelectedCycleId } });
+  if (!roster.length) { area.innerHTML = '<div class="card"><p style="color:#888">لا يوجد موظفون ضمن نطاقك للتقييم</p></div>'; return; }
+
+  area.innerHTML = `<div class="card"><h3>الموظفون (${roster.filter((r) => r.evaluated).length}/${roster.length} تم تقييمهم)</h3>
+    <div class="person-card-grid">
+      ${roster.map((r) => `
+        <div class="person-card" data-eval-employee="${escapeHtml(r.id)}" data-eval-branch="${escapeHtml(r.branch)}" data-card-clickable>
+          <div class="person-card-header">
+            <span class="person-avatar">${escapeHtml((r.name_ar || '؟').trim().charAt(0))}</span>
+            <div class="person-card-info">
+              <div class="person-card-name">${escapeHtml(r.name_ar)}</div>
+              <div class="person-card-role">${escapeHtml(ROLE_LABELS_AR[r.role] || r.role)}</div>
+            </div>
+            <span class="status-badge ${r.evaluated ? 'status-badge-on' : 'status-badge-off'}">${r.evaluated ? r.score + '/100' : 'لم يُقيَّم بعد'}</span>
+          </div>
+        </div>`).join('')}
+    </div>
+  </div>`;
+
+  area.querySelectorAll('[data-eval-employee]').forEach((card) => {
+    card.addEventListener('click', async () => {
+      perfSelectedEmployeeId = card.getAttribute('data-eval-employee');
+      await loadEvaluationForm(card.getAttribute('data-eval-branch'));
+      document.getElementById('perfEvalFormBox').scrollIntoView({ behavior: 'smooth' });
+    });
   });
 }
 
@@ -2317,6 +2338,7 @@ async function loadEvaluationForm(branch) {
         },
       });
       showToast(`تم الحفظ — النتيجة النهائية: ${result.finalScore}/100`, 'success');
+      await loadPerfRoster(); // 🆕 يُحدِّث قائمة الموظفين فوراً (تظهر النتيجة الجديدة)، ويُخفي النموذج تلقائياً
     } catch (e) { showToast(e.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = 'حفظ التقييم'; }
   });
@@ -2326,7 +2348,7 @@ async function loadEvaluationForm(branch) {
     try {
       await apiCall('performance', { method: 'POST', body: { action: 'deleteEvaluation', id: existing.evaluation.id } });
       showToast('تم الحذف بنجاح', 'success');
-      loadEvaluationForm(branch);
+      await loadPerfRoster(); // 🆕 يُحدِّث القائمة ويُخفي النموذج بدل تركه ظاهراً
     } catch (e) { showToast(e.message, 'error'); }
   });
 }
@@ -2363,23 +2385,63 @@ async function loadPerfDashboard() {
   const stats = await apiCall('performance', { method: 'POST', body: { action: 'dashboardStats', cycleId, branchFilter } });
 
   area.innerHTML = `
-    <div class="card">
-      <h3>نظرة عامة</h3>
-      <div class="modal-detail-row"><span class="modal-detail-label">متوسط الأداء العام</span><span class="modal-detail-value" style="font-size:18px">${stats.average} / 100</span></div>
-      <div class="modal-detail-row"><span class="modal-detail-label">عدد التقييمات المسجَّلة</span><span class="modal-detail-value">${stats.count}</span></div>
+    <div class="card" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+      ${renderGaugeSVG(stats.average)}
+      <div>
+        <div style="font-size:12.5px;color:var(--text-muted);font-weight:700">متوسط الأداء العام</div>
+        <div style="font-size:28px;font-weight:800;color:var(--primary)">${stats.average} <span style="font-size:14px;color:var(--text-muted);font-weight:600">/ 100</span></div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${stats.count} تقييماً مسجَّلاً هذي الدورة</div>
+      </div>
     </div>
     <div class="card">
       <h3>أفضل 5 موظفين</h3>
-      ${stats.topPerformers.map((p) => `<div class="modal-detail-row"><span class="modal-detail-label">${escapeHtml(p.name || '—')}</span><span class="modal-detail-value" style="color:#2F7A4D">${p.score}</span></div>`).join('') || '<p style="color:#888">لا بيانات</p>'}
+      ${renderBarChartSVG(stats.topPerformers.map((p) => ({ label: p.name || '—', value: p.score })), '#2F7A4D')}
     </div>
     <div class="card">
       <h3>يحتاجون تحسيناً</h3>
-      ${stats.needsImprovement.map((p) => `<div class="modal-detail-row"><span class="modal-detail-label">${escapeHtml(p.name || '—')}</span><span class="modal-detail-value" style="color:#C4483A">${p.score}</span></div>`).join('') || '<p style="color:#888">لا بيانات</p>'}
+      ${renderBarChartSVG(stats.needsImprovement.map((p) => ({ label: p.name || '—', value: p.score })), '#C4483A')}
     </div>
     <div class="card">
       <h3>مقارنة بين الفروع</h3>
-      ${Object.entries(stats.byBranch).map(([b, avg]) => `<div class="modal-detail-row"><span class="modal-detail-label">${escapeHtml(b)}</span><span class="modal-detail-value">${avg}</span></div>`).join('') || '<p style="color:#888">لا بيانات</p>'}
+      ${renderBarChartSVG(Object.entries(stats.byBranch).map(([b, avg]) => ({ label: b, value: avg })), '#7B5FB8')}
     </div>`;
+}
+
+/** 🆕 رسم بياني شريطي أفقي — SVG خالص، بلا أي مكتبة خارجية، يُعاد استخدامه بأي لوحة إحصاءات قادمة */
+function renderBarChartSVG(items, color) {
+  if (!items.length) return '<p style="color:#888">لا بيانات كافية بعد</p>';
+  const maxVal = Math.max(100, ...items.map((i) => i.value));
+  const rowHeight = 34;
+  const svgHeight = items.length * rowHeight + 10;
+  const chartWidth = 100; // نسبة مئوية من عرض الحاوية
+
+  return `
+    <svg viewBox="0 0 400 ${svgHeight}" style="width:100%;height:auto" xmlns="http://www.w3.org/2000/svg">
+      ${items.map((item, i) => {
+        const y = i * rowHeight;
+        const barWidth = Math.max(4, (item.value / maxVal) * 260);
+        return `
+          <text x="398" y="${y + 14}" text-anchor="end" font-size="11" font-weight="700" fill="var(--primary)">${escapeHtml(item.label.length > 18 ? item.label.slice(0, 18) + '…' : item.label)}</text>
+          <rect x="${398 - 260}" y="${y + 18}" width="260" height="10" rx="5" fill="var(--surface)"></rect>
+          <rect x="${398 - barWidth}" y="${y + 18}" width="${barWidth}" height="10" rx="5" fill="${color}"></rect>
+          <text x="${398 - 265}" y="${y + 27}" text-anchor="end" font-size="10" font-weight="800" fill="${color}">${item.value}</text>
+        `;
+      }).join('')}
+    </svg>`;
+}
+
+/** 🆕 مقياس دائري بسيط (Gauge) — للمتوسط العام */
+function renderGaugeSVG(value) {
+  const pct = Math.max(0, Math.min(100, value)) / 100;
+  const radius = 42, circumference = 2 * Math.PI * radius;
+  const offset = circumference * (1 - pct);
+  const color = value >= 85 ? '#2F7A4D' : value >= 65 ? '#B8860B' : '#C4483A';
+  return `
+    <svg width="100" height="100" viewBox="0 0 100 100" style="flex-shrink:0">
+      <circle cx="50" cy="50" r="${radius}" fill="none" stroke="var(--surface)" stroke-width="10"></circle>
+      <circle cx="50" cy="50" r="${radius}" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round"
+        stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 50 50)"></circle>
+    </svg>`;
 }
 
 /* -------------------- معايير التقييم (أدمن) — مُجمَّعة بصناديق حسب الدور، مع تعديل -------------------- */
