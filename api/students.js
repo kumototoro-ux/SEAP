@@ -19,11 +19,13 @@ const STUDENT_MANAGE_ROLES_ = ['role_admin', 'Admission', 'role_student_sup'];
 async function handleList(req, res) {
   const user = requireAuth(req);
   requireRole(user, STUDENT_MANAGE_ROLES_); // 🆕 كان مفقوداً — نفس ثغرة الموظفين بالضبط
-  const { data, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from('students')
     .select('id, national_id, name_ar, name_en, nationality, date_of_birth, gender, branch, stage, grade, section, subjects, fee_status, created_at')
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
+  if (user.role === 'role_student_sup') query = query.eq('branch', user.branch); // 🆕 مشرف الطلاب مقيَّد بفرعه فقط
+  const { data, error } = await query;
   if (error) throw error;
   return res.status(200).json({ success: true, data });
 }
