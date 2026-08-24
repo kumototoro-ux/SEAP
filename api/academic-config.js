@@ -27,12 +27,12 @@ async function handleAddMatrixEntries(req, res) {
 
   const { data: existingRows } = await supabaseAdmin
     .from('subject_distribution_matrix').select('subject')
-    .eq('branch', d.branch).eq('grade', d.grade).eq('section', d.section);
+    .eq('branch', d.branch).eq('stage', d.stage).eq('grade', d.grade).eq('section', d.section);
   const existingSubjects = new Set((existingRows || []).map((r) => r.subject));
   const newSubjects = d.subjects.filter((s) => !existingSubjects.has(s));
 
   if (newSubjects.length) {
-    const rows = newSubjects.map((subject) => ({ branch: d.branch, grade: d.grade, section: d.section, subject }));
+    const rows = newSubjects.map((subject) => ({ branch: d.branch, stage: d.stage, grade: d.grade, section: d.section, subject }));
     const { error } = await supabaseAdmin.from('subject_distribution_matrix').insert(rows);
     if (error) throw error;
   }
