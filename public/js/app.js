@@ -2241,16 +2241,29 @@ async function loadEvaluationForm(branch) {
 
   box.innerHTML = `
     <div class="card">
-      <h3>نموذج التقييم</h3>
-      ${criteria.map((c) => `
-        <div class="field">
-          <label>${escapeHtml(c.name)} <span style="color:#888;font-weight:400">(وزن ${c.weight}%)</span></label>
-          <input type="number" class="perf-score-input" data-criterion-id="${c.id}" data-weight="${c.weight}" min="0" max="100" value="${existingScoresMap[c.id] ?? 70}">
-        </div>`).join('')}
+      <h3 style="margin-bottom:4px">نموذج التقييم</h3>
+      <p style="color:#888;font-size:12px;margin-top:0">حرّك كل معيار وفق الأداء الفعلي — النتيجة النهائية تُحسَب تلقائياً بالأسفل</p>
+      ${criteria.map((c) => {
+        const val = existingScoresMap[c.id] ?? 70;
+        return `
+        <div class="perf-criterion-card">
+          <div class="perf-criterion-head">
+            <span class="perf-criterion-name">${escapeHtml(c.name)}</span>
+            <span class="status-badge status-badge-off">وزن ${c.weight}%</span>
+          </div>
+          <div class="perf-criterion-slider-row">
+            <input type="range" class="perf-score-input" data-criterion-id="${c.id}" data-weight="${c.weight}" min="0" max="100" value="${val}">
+            <span class="perf-score-value" id="perfScoreLabel_${c.id}">${val}</span>
+          </div>
+        </div>`;
+      }).join('')}
+
+      <div class="filter-card-title" style="margin-top:22px">ملاحظات التقييم</div>
       <div class="field"><label>نقاط القوة</label><textarea id="perf_strengths" rows="2">${escapeHtml(existing.evaluation?.strengths || '')}</textarea></div>
       <div class="field"><label>نقاط تحتاج تحسيناً</label><textarea id="perf_improvements" rows="2">${escapeHtml(existing.evaluation?.improvements || '')}</textarea></div>
       <div class="field"><label>ملاحظات المدير</label><textarea id="perf_notes" rows="2">${escapeHtml(existing.evaluation?.manager_notes || '')}</textarea></div>
-      <div class="modal-detail-row" id="perf_liveTotal" style="border-top:2px solid var(--outline);padding-top:12px"></div>
+
+      <div class="perf-final-score-box" id="perf_liveTotal"></div>
       <button type="button" id="perf_saveBtn" style="margin-top:14px;width:100%">${existing.evaluation ? 'تحديث التقييم' : 'حفظ التقييم'}</button>
     </div>`;
 
@@ -2259,9 +2272,11 @@ async function loadEvaluationForm(branch) {
     document.querySelectorAll('.perf-score-input').forEach((inp) => {
       const w = Number(inp.getAttribute('data-weight'));
       weightedSum += Number(inp.value) * w; totalWeight += w;
+      document.getElementById(`perfScoreLabel_${inp.getAttribute('data-criterion-id')}`).textContent = inp.value;
     });
     const final = totalWeight ? Math.round((weightedSum / totalWeight) * 100) / 100 : 0;
-    document.getElementById('perf_liveTotal').innerHTML = `<span class="modal-detail-label">النتيجة النهائية المتوقَّعة</span><span class="modal-detail-value" style="font-size:16px">${final} / 100</span>`;
+    const color = final >= 85 ? '#2F7A4D' : final >= 65 ? '#B8860B' : '#C4483A';
+    document.getElementById('perf_liveTotal').innerHTML = `<span>النتيجة النهائية المتوقَّعة</span><span style="color:${color};font-size:22px;font-weight:800">${final} / 100</span>`;
   }
   document.querySelectorAll('.perf-score-input').forEach((inp) => inp.addEventListener('input', recalcLiveTotal));
   recalcLiveTotal();
@@ -2328,35 +2343,57 @@ async function loadPerfDashboard() {
     </div>`;
 }
 
-/* -------------------- معايير التقييم (أدمن) -------------------- */
+/* -------------------- معايير التقييم (أدمن) — مُجمَّعة بصناديق حسب الدور، مع تعديل -------------------- */
+const PERF_ROLE_LABELS_ = { role_teacher: 'معلم', role_teacher_sup: 'مشرف معلمين', role_student_sup: 'مشرف طلاب', role_branch_monitor: 'مراقب فروع' };
+let perfEditingCriterionId = null;
+
 async function renderPerfCriteriaSection(content) {
-  const settings = await getSettingsOnce();
   const criteria = await apiCall('performance', { method: 'POST', body: { action: 'listCriteria' } });
-  const roleOptions = [
-    { v: 'role_teacher', l: 'معلم' }, { v: 'role_teacher_sup', l: 'مشرف معلمين' },
-    { v: 'role_student_sup', l: 'مشرف طلاب' }, { v: 'role_branch_monitor', l: 'مراقب فروع' },
-  ];
+  const roleOptions = Object.entries(PERF_ROLE_LABELS_).map(([v, l]) => ({ v, l }));
+  perfEditingCriterionId = null;
 
   content.innerHTML = `
     <div class="card">
-      <h2>إضافة معيار تقييم</h2>
+      <h2 id="crit_formTitle">إضافة معيار تقييم جديد</h2>
+      <input type="hidden" id="crit_editId" value="">
       <div class="field"><label>اسم المعيار</label><input type="text" id="crit_name" placeholder="مثال: جودة العمل"></div>
       <div class="field"><label>الوزن (%)</label><input type="number" id="crit_weight" min="1" max="100" value="10"></div>
       <div class="filter-card-title">ينطبق على الأدوار</div>
       <div class="checkbox-list" id="crit_rolesBox">${roleOptions.map((o) => `<label class="checkbox-item"><input type="checkbox" class="crit-role-cb" value="${o.v}"> ${o.l}</label>`).join('')}</div>
       <button type="button" id="crit_addBtn" style="margin-top:14px">إضافة</button>
+      <button type="button" id="crit_cancelEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
     </div>
-    <div class="card">
-      <h3>المعايير الحالية</h3>
-      ${criteria.map((c) => `
-        <div class="modal-detail-row">
-          <span class="modal-detail-label">${escapeHtml(c.name)} (${c.weight}%)</span>
-          <span class="modal-detail-value" style="display:flex;align-items:center;gap:8px">
-            ${(c.applicable_roles || []).join('، ')}
-            <span data-del-criterion="${c.id}" style="cursor:pointer;color:#c62828">${ICONS.trash()}</span>
-          </span>
-        </div>`).join('') || '<p style="color:#888">لا توجد معايير بعد</p>'}
-    </div>`;
+    ${roleOptions.map(({ v: roleKey, l: roleLabel }) => {
+      const roleCriteria = criteria.filter((c) => (c.applicable_roles || []).includes(roleKey));
+      const totalWeight = roleCriteria.reduce((s, c) => s + Number(c.weight), 0);
+      return `
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <h3 style="margin:0">معايير ${escapeHtml(roleLabel)}</h3>
+          <span class="status-badge ${totalWeight === 100 ? 'status-badge-on' : 'status-badge-off'}">مجموع الأوزان: ${totalWeight}%${totalWeight !== 100 ? ' ⚠️' : ''}</span>
+        </div>
+        ${roleCriteria.length ? roleCriteria.map((c) => `
+          <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface)">
+            <span style="font-weight:700;font-size:13px">${escapeHtml(c.name)}</span>
+            <span style="display:flex;align-items:center;gap:10px">
+              <span class="status-badge status-badge-off" style="color:var(--primary);background:var(--surface)">${c.weight}%</span>
+              <span data-edit-criterion="${c.id}" style="cursor:pointer;color:var(--primary)">${ICONS.edit()}</span>
+              <span data-del-criterion="${c.id}" style="cursor:pointer;color:#c62828">${ICONS.trash()}</span>
+            </span>
+          </div>`).join('') : '<p style="color:#aaa;font-size:12.5px">لا معايير بعد لهذا الدور</p>'}
+      </div>`;
+    }).join('')}`;
+
+  function resetCriterionForm() {
+    perfEditingCriterionId = null;
+    document.getElementById('crit_editId').value = '';
+    document.getElementById('crit_name').value = '';
+    document.getElementById('crit_weight').value = '10';
+    document.querySelectorAll('.crit-role-cb').forEach((cb) => { cb.checked = false; });
+    document.getElementById('crit_formTitle').textContent = 'إضافة معيار تقييم جديد';
+    document.getElementById('crit_addBtn').textContent = 'إضافة';
+    document.getElementById('crit_cancelEditBtn').style.display = 'none';
+  }
 
   document.getElementById('crit_addBtn').addEventListener('click', async () => {
     const name = document.getElementById('crit_name').value.trim();
@@ -2364,10 +2401,30 @@ async function renderPerfCriteriaSection(content) {
     const applicableRoles = collectCheckedValues('.crit-role-cb');
     if (!name || !applicableRoles.length) { showToast('أكمل الاسم واختر دوراً واحداً على الأقل', 'error'); return; }
     try {
-      await apiCall('performance', { method: 'POST', body: { action: 'saveCriterion', name, weight, applicableRoles } });
-      showToast('تمت الإضافة بنجاح', 'success');
+      const body = { action: 'saveCriterion', name, weight, applicableRoles };
+      if (perfEditingCriterionId) body.id = perfEditingCriterionId;
+      await apiCall('performance', { method: 'POST', body });
+      showToast(perfEditingCriterionId ? 'تم تعديل المعيار بنجاح' : 'تمت الإضافة بنجاح', 'success');
       renderPerfCriteriaSection(content);
     } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  document.getElementById('crit_cancelEditBtn').addEventListener('click', resetCriterionForm);
+
+  content.querySelectorAll('[data-edit-criterion]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const c = criteria.find((x) => String(x.id) === el.getAttribute('data-edit-criterion'));
+      if (!c) return;
+      perfEditingCriterionId = c.id;
+      document.getElementById('crit_editId').value = c.id;
+      document.getElementById('crit_name').value = c.name;
+      document.getElementById('crit_weight').value = c.weight;
+      document.querySelectorAll('.crit-role-cb').forEach((cb) => { cb.checked = (c.applicable_roles || []).includes(cb.value); });
+      document.getElementById('crit_formTitle').textContent = 'تعديل معيار: ' + c.name;
+      document.getElementById('crit_addBtn').textContent = 'حفظ التعديلات';
+      document.getElementById('crit_cancelEditBtn').style.display = 'inline-block';
+      document.getElementById('crit_formTitle').scrollIntoView({ behavior: 'smooth' });
+    });
   });
 
   content.querySelectorAll('[data-del-criterion]').forEach((el) => {
