@@ -24,7 +24,7 @@ function checkEvaluatorAccess(evaluator, targetEmployee) {
   }
   if (evaluator.role === 'role_branch_monitor') {
     const allowedBranches = evaluator.allBranches || [evaluator.branch];
-    if (['role_teacher_sup', 'role_student_sup'].includes(targetEmployee.role) && allowedBranches.includes(targetEmployee.branch)) return;
+    if (allowedBranches.includes(targetEmployee.branch)) return; // 🆕 كل موظفي فروعه، لا المشرفين فقط
   }
   const e = new Error('غير مصرَّح لك بتقييم هذا الموظف');
   e.statusCode = 403;
@@ -50,7 +50,7 @@ async function handleListEvaluatable(req, res) {
 
   let query = supabaseAdmin.from('employees').select('id, name_ar, role, branch').is('deleted_at', null);
   if (user.role === 'role_teacher_sup') query = query.eq('role', 'role_teacher').eq('branch', user.branch);
-  else if (user.role === 'role_branch_monitor') query = query.in('role', ['role_teacher_sup', 'role_student_sup']).in('branch', user.allBranches || [user.branch]);
+  else if (user.role === 'role_branch_monitor') query = query.in('branch', user.allBranches || [user.branch]).neq('id', user.id); // 🆕 كل موظفي فروعه (عدا نفسه)
 
   const { data, error } = await query;
   if (error) throw error;
@@ -69,14 +69,21 @@ async function handleSaveCriterion(req, res) {
   const user = requireAuth(req);
   requireRole(user, ['role_admin']);
   const d = validateBody(z.object({
+    id: z.union([z.string(), z.number()]).optional(), // 🆕 وجوده يعني تعديل معيار موجود، غيابه يعني إضافة جديد
     name: z.string().min(2).max(150),
     weight: z.number().min(1).max(100),
     applicableRoles: z.array(z.string()).min(1, 'اختر دوراً واحداً على الأقل'),
   }), req.body);
 
-  const { error } = await supabaseAdmin.from('evaluation_criteria').insert({ name: d.name, weight: d.weight, applicable_roles: d.applicableRoles });
-  if (error) throw error;
-  await supabaseAdmin.from('audit_log').insert({ emp_id: user.id, emp_name: user.fullName, role: user.role, action: 'إضافة معيار تقييم', details: d, branch: user.branch });
+  if (d.id) {
+    const { error } = await supabaseAdmin.from('evaluation_criteria').update({ name: d.name, weight: d.weight, applicable_roles: d.applicableRoles }).eq('id', d.id);
+    if (error) throw error;
+    await supabaseAdmin.from('audit_log').insert({ emp_id: user.id, emp_name: user.fullName, role: user.role, action: 'تعديل معيار تقييم', details: d, branch: user.branch });
+  } else {
+    const { error } = await supabaseAdmin.from('evaluation_criteria').insert({ name: d.name, weight: d.weight, applicable_roles: d.applicableRoles });
+    if (error) throw error;
+    await supabaseAdmin.from('audit_log').insert({ emp_id: user.id, emp_name: user.fullName, role: user.role, action: 'إضافة معيار تقييم', details: d, branch: user.branch });
+  }
   return res.status(200).json({ success: true, data: true });
 }
 
@@ -161,6 +168,14 @@ async function handleSaveEvaluation(req, res) {
   const { data: employee } = await supabaseAdmin.from('employees').select('id, role, branch').eq('id', d.employeeId).maybeSingle();
   if (!employee) { const e = new Error('الموظف غير موجود'); e.statusCode = 404; throw e; }
   checkEvaluatorAccess(user, employee);
+
+  // 🆕 تحقّق خادم حقيقي (لا واجهة فقط) — الدورة يجب تكون نشطة، وإلا لا يُقبَل أي تقييم جديد أو تعديل عليها
+  const { data: cycle } = await supabaseAdmin.from('evaluation_cycles').select('status').eq('id', d.cycleId).maybeSingle();
+  if (!cycle || cycle.status !== 'active') {
+    const err = new Error('هذي الدورة مغلقة — لا يمكن إضافة أو تعديل تقييمات فيها');
+    err.statusCode = 403;
+    throw err;
+  }
 
   const { data: criteriaRows } = await supabaseAdmin.from('evaluation_criteria').select('id, weight').in('id', d.scores.map((s) => s.criterionId));
   const weightMap = {}; (criteriaRows || []).forEach((c) => { weightMap[c.id] = Number(c.weight); });
