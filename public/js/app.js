@@ -1804,7 +1804,7 @@ function renderAuditLogTable() {
         <div style="font-weight:700;font-size:13px">${escapeHtml(r.action)}</div>
         <div style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(r.emp_name)} — ${escapeHtml(r.role)} — ${escapeHtml(r.branch)}</div>
       </div>
-      <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${new Date(r.timestamp).toLocaleString('ar')}</span>
+      <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${new Date(r.created_at).toLocaleString('ar')}</span>
     </div>`).join('');
 }
 
