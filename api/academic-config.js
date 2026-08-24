@@ -1,16 +1,15 @@
 // api/academic-config.js
 // =====================================================================
-// إجراءات: listMatrix, addMatrixEntry, deleteMatrixEntry (مصفوفة توزيع
-// المواد: أي مادة تُدرَّس بأي فرع/صف/شعبة)، و listGradeDist,
-// addGradeDist, deleteGradeDist (توزيع الدرجات: نوع التقييم ودرجته من
-// 100 لكل مادة). كلاهما إعدادات أكاديمية أساسية، أدمن فقط.
+// إجراءات: listMatrix, addMatrixEntries (مواد متعددة دفعة واحدة),
+// deleteMatrixEntry، listGradeDist, saveGradeDistForSubject (يستبدل كل
+// توزيع مادة معيّنة دفعة واحدة — بطاقة ذكية بالواجهة)، deleteGradeDist.
 // =====================================================================
 
 import { supabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth, requireRole } from '../lib/auth.js';
 import { createRouter } from '../lib/router.js';
 import { z } from 'zod';
-import { validateBody, addMatrixEntrySchema, addGradeDistributionSchema } from '../lib/validation.js';
+import { validateBody, addMatrixEntriesSchema, saveGradeDistForSubjectSchema } from '../lib/validation.js';
 
 /* -------------------- مصفوفة توزيع المواد -------------------- */
 async function handleListMatrix(req, res) {
@@ -20,28 +19,28 @@ async function handleListMatrix(req, res) {
   return res.status(200).json({ success: true, data });
 }
 
-async function handleAddMatrixEntry(req, res) {
+async function handleAddMatrixEntries(req, res) {
   const user = requireAuth(req);
   requireRole(user, ['role_admin']);
-  const d = validateBody(addMatrixEntrySchema, req.body);
+  const d = validateBody(addMatrixEntriesSchema, req.body);
 
-  const { error } = await supabaseAdmin.from('subject_distribution_matrix').insert({
-    branch: d.branch, grade: d.grade, section: d.section, subject: d.subject,
-  });
-  if (error) {
-    if (error.code === '23505') {
-      const err = new Error('هذا التوزيع مُسجَّل بالفعل');
-      err.statusCode = 409;
-      throw err;
-    }
-    throw error;
+  const { data: existingRows } = await supabaseAdmin
+    .from('subject_distribution_matrix').select('subject')
+    .eq('branch', d.branch).eq('grade', d.grade).eq('section', d.section);
+  const existingSubjects = new Set((existingRows || []).map((r) => r.subject));
+  const newSubjects = d.subjects.filter((s) => !existingSubjects.has(s));
+
+  if (newSubjects.length) {
+    const rows = newSubjects.map((subject) => ({ branch: d.branch, grade: d.grade, section: d.section, subject }));
+    const { error } = await supabaseAdmin.from('subject_distribution_matrix').insert(rows);
+    if (error) throw error;
   }
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
-    action: 'إضافة توزيع مادة', details: d, branch: user.branch,
+    action: 'إضافة توزيع مواد', details: { ...d, addedCount: newSubjects.length }, branch: user.branch,
   });
-  return res.status(200).json({ success: true, data: true });
+  return res.status(200).json({ success: true, data: { added: newSubjects.length, skipped: d.subjects.length - newSubjects.length } });
 }
 
 async function handleDeleteMatrixEntry(req, res) {
@@ -67,26 +66,26 @@ async function handleListGradeDist(req, res) {
   return res.status(200).json({ success: true, data });
 }
 
-async function handleAddGradeDist(req, res) {
+async function handleSaveGradeDistForSubject(req, res) {
   const user = requireAuth(req);
   requireRole(user, ['role_admin']);
-  const d = validateBody(addGradeDistributionSchema, req.body);
+  const d = validateBody(saveGradeDistForSubjectSchema, req.body);
 
-  const { error } = await supabaseAdmin.from('grade_distribution').insert({
-    subject: d.subject, eval_type: d.evalType, max_score: d.maxScore,
-  });
-  if (error) {
-    if (error.code === '23505') {
-      const err = new Error('نوع التقييم هذا مُسجَّل بالفعل لهذي المادة');
-      err.statusCode = 409;
-      throw err;
-    }
-    throw error;
+  const total = d.entries.reduce((sum, e) => sum + e.maxScore, 0);
+  if (total > 100) {
+    const err = new Error(`مجموع الدرجات (${total}) يتجاوز 100 — صحّح القيم قبل الحفظ`);
+    err.statusCode = 400;
+    throw err;
   }
+
+  await supabaseAdmin.from('grade_distribution').delete().eq('subject', d.subject);
+  const rows = d.entries.map((e) => ({ subject: d.subject, eval_type: e.evalType, max_score: e.maxScore }));
+  const { error } = await supabaseAdmin.from('grade_distribution').insert(rows);
+  if (error) throw error;
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
-    action: 'إضافة توزيع درجات', details: d, branch: user.branch,
+    action: 'حفظ توزيع درجات مادة', details: { subject: d.subject, entriesCount: d.entries.length, total }, branch: user.branch,
   });
   return res.status(200).json({ success: true, data: true });
 }
@@ -108,9 +107,9 @@ async function handleDeleteGradeDist(req, res) {
 
 export default createRouter({
   listMatrix: handleListMatrix,
-  addMatrixEntry: handleAddMatrixEntry,
+  addMatrixEntries: handleAddMatrixEntries,
   deleteMatrixEntry: handleDeleteMatrixEntry,
   listGradeDist: handleListGradeDist,
-  addGradeDist: handleAddGradeDist,
+  saveGradeDistForSubject: handleSaveGradeDistForSubject,
   deleteGradeDist: handleDeleteGradeDist,
 });
