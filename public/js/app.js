@@ -962,11 +962,19 @@ async function renderParentsView() {
           </select>
         </div>
 
-        <div class="filter-card-title">ربط بالطالب/الطلاب * (ابحث بالاسم واضغط لإضافة)</div>
-        <input type="text" id="parentStudentSearch" placeholder="اكتب اسم الطالب للبحث..." style="margin-bottom:8px">
-        <div id="parentStudentSearchResults" class="checkbox-list"></div>
-        <div class="filter-card-title">الطلاب المرتبطون حالياً</div>
-        <div id="parentSelectedStudents" class="checkbox-list"><span style="color:#aaa;font-size:12px">لا يوجد طالب مُختار بعد</span></div>
+        <div class="student-linker-box">
+          <div class="filter-card-title">ربط بالطالب/الطلاب *</div>
+          <div class="student-search-input-wrap">
+            ${ICONS.search()}
+            <input type="text" id="parentStudentSearch" placeholder="اكتب اسم الطالب للبحث...">
+          </div>
+          <div id="parentStudentSearchResults" class="student-search-results"></div>
+
+          <div class="filter-card-title" style="margin-top:16px">الطلاب المرتبطون حالياً</div>
+          <div id="parentSelectedStudents" class="student-chip-list">
+            <span class="student-linker-empty">لا يوجد طالب مُختار بعد</span>
+          </div>
+        </div>
 
         <button type="submit" id="addParentBtn" style="margin-top:14px">تسجيل ولي الأمر</button>
         <button type="button" id="cancelParentEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
@@ -997,17 +1005,25 @@ async function renderParentsView() {
 function renderParentStudentSearchResults() {
   const q = (document.getElementById('parentStudentSearch').value || '').trim().toLowerCase();
   const box = document.getElementById('parentStudentSearchResults');
-  if (!q) { box.innerHTML = ''; return; }
+  if (!q) { box.classList.remove('show'); box.innerHTML = ''; return; }
   const matches = APP.allStudents.filter((s) => s.name_ar.toLowerCase().includes(q) && !selectedParentStudentIds.includes(s.id)).slice(0, 8);
+  box.classList.add('show');
   box.innerHTML = matches.map((s) => `
-    <span class="checkbox-item" data-add-student="${escapeHtml(s.id)}" style="cursor:pointer">+ ${escapeHtml(s.name_ar)} <span style="color:#aaa">(${escapeHtml(s.grade)})</span></span>
-  `).join('') || '<span style="color:#aaa;font-size:12px">لا نتائج</span>';
+    <div class="student-search-result-item" data-add-student="${escapeHtml(s.id)}">
+      <span class="person-avatar" style="width:32px;height:32px;font-size:13px">${escapeHtml((s.name_ar || '؟').trim().charAt(0))}</span>
+      <div>
+        <div class="search-result-label">${escapeHtml(s.name_ar)}</div>
+        <div class="search-result-sublabel">${escapeHtml(s.grade)} — ${escapeHtml(s.section)}</div>
+      </div>
+      <span class="student-add-icon">${ICONS.plus()}</span>
+    </div>
+  `).join('') || '<p style="padding:12px;color:#aaa;font-size:12.5px;text-align:center">لا نتائج مطابقة</p>';
 
   box.querySelectorAll('[data-add-student]').forEach((el) => {
     el.addEventListener('click', () => {
       selectedParentStudentIds.push(el.getAttribute('data-add-student'));
       document.getElementById('parentStudentSearch').value = '';
-      box.innerHTML = '';
+      box.innerHTML = ''; box.classList.remove('show');
       renderSelectedParentStudents();
     });
   });
@@ -1015,10 +1031,14 @@ function renderParentStudentSearchResults() {
 
 function renderSelectedParentStudents() {
   const box = document.getElementById('parentSelectedStudents');
-  if (!selectedParentStudentIds.length) { box.innerHTML = '<span style="color:#aaa;font-size:12px">لا يوجد طالب مُختار بعد</span>'; return; }
+  if (!selectedParentStudentIds.length) { box.innerHTML = '<span class="student-linker-empty">لا يوجد طالب مُختار بعد</span>'; return; }
   box.innerHTML = selectedParentStudentIds.map((sid) => {
     const stu = APP.allStudents.find((s) => s.id === sid);
-    return `<span class="checkbox-item">${escapeHtml(stu ? stu.name_ar : sid)} <span data-remove-student="${escapeHtml(sid)}" style="cursor:pointer;color:#c62828;margin-right:4px">✕</span></span>`;
+    return `<span class="student-chip">
+      <span class="person-avatar" style="width:24px;height:24px;font-size:11px">${escapeHtml((stu?.name_ar || '؟').trim().charAt(0))}</span>
+      ${escapeHtml(stu ? stu.name_ar : sid)}
+      <span data-remove-student="${escapeHtml(sid)}" class="student-chip-remove">${ICONS.close()}</span>
+    </span>`;
   }).join('');
   box.querySelectorAll('[data-remove-student]').forEach((el) => {
     el.addEventListener('click', () => {
