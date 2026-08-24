@@ -22,6 +22,7 @@ async function handleList(req, res) {
   const { data, error } = await supabaseAdmin
     .from('students')
     .select('id, national_id, name_ar, name_en, nationality, date_of_birth, gender, branch, stage, grade, section, subjects, fee_status, created_at')
+    .is('deleted_at', null)
     .order('created_at', { ascending: false });
   if (error) throw error;
   return res.status(200).json({ success: true, data });
@@ -33,7 +34,7 @@ async function handleAdd(req, res) {
   requireRole(user, STUDENT_MANAGE_ROLES_);
   const d = validateBody(addStudentSchema, req.body);
 
-  const { data: existing } = await supabaseAdmin.from('students').select('id').eq('national_id', d.nationalId).maybeSingle();
+  const { data: existing } = await supabaseAdmin.from('students').select('id').eq('national_id', d.nationalId).is('deleted_at', null).maybeSingle();
   if (existing) {
     const err = new Error('رقم الهوية هذا مسجَّل بالفعل لطالب آخر');
     err.statusCode = 409;
@@ -71,7 +72,7 @@ async function handleUpdate(req, res) {
   const { id } = validateBody(z.object({ id: z.string().min(1) }).passthrough(), req.body);
   const d = validateBody(updateStudentSchema, req.body);
 
-  const { data: existing, error: findError } = await supabaseAdmin.from('students').select('id').eq('id', id).maybeSingle();
+  const { data: existing, error: findError } = await supabaseAdmin.from('students').select('id').eq('id', id).is('deleted_at', null).maybeSingle();
   if (findError) throw findError;
   if (!existing) {
     const err = new Error('الطالب غير موجود');
@@ -107,8 +108,9 @@ async function handleDelete(req, res) {
     throw err;
   }
 
-  const { error } = await supabaseAdmin.from('students').delete().eq('id', id);
+  const { error } = await supabaseAdmin.from('students').update({ deleted_at: new Date().toISOString() }).eq('id', id);
   if (error) throw error;
+  await supabaseAdmin.from('family_accounts').update({ status: 'غير نشط' }).eq('student_id', id);
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
