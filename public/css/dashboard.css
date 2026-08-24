@@ -249,6 +249,35 @@ button:disabled { opacity: .5; cursor: wait; }
   background: var(--surface); border-radius: var(--radius-sm); border: 2px solid var(--outline); font-weight: 700; font-size: 13.5px;
 }
 
+/* ---------- 🆕 صفحة سلوك الطلاب الاحترافية ---------- */
+.behavior-score-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 16px; }
+.behavior-student-info { display: flex; align-items: center; gap: 12px; }
+.behavior-score-circle {
+  width: 78px; height: 78px; border-radius: 50%; border: 4px solid; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; flex-shrink: 0;
+}
+.behavior-score-circle span:first-child { font-size: 24px; font-weight: 800; }
+.behavior-score-sublabel { font-size: 9px; color: var(--text-muted); }
+.behavior-stats-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--surface); }
+.behavior-stat-chip { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.behavior-stat-positive { background: #E7F5EC; color: #2F7A4D; }
+.behavior-stat-negative { background: #FBEAE8; color: #C4483A; }
+.behavior-type-toggle { display: flex; gap: 8px; margin-bottom: 14px; }
+.behavior-type-btn {
+  flex: 1; padding: 10px; border-radius: var(--radius-sm); border: 1.5px solid var(--outline); background: var(--surface);
+  color: var(--text-muted); font-weight: 700; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.behavior-type-btn.active[data-behavior-type="positive"] { background: #E7F5EC; border-color: #2F7A4D; color: #2F7A4D; }
+.behavior-type-btn.active[data-behavior-type="negative"] { background: #FBEAE8; border-color: #C4483A; color: #C4483A; }
+.behavior-history-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--surface); }
+.behavior-history-badge { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 14px; flex-shrink: 0; }
+.behavior-history-positive .behavior-history-badge { background: #E7F5EC; color: #2F7A4D; }
+.behavior-history-negative .behavior-history-badge { background: #FBEAE8; color: #C4483A; }
+.behavior-history-body { flex: 1; min-width: 0; }
+.behavior-history-desc { font-size: 13px; font-weight: 600; color: var(--primary); }
+.behavior-history-date { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.behavior-history-delete { cursor: pointer; color: #c62828; flex-shrink: 0; }
+
 /* ---------- 🆕 مكوّن ربط الطلاب بولي الأمر — حاوية أنيقة موحَّدة ---------- */
 .student-linker-box {
   background: var(--surface); border: 1px solid var(--outline); border-radius: var(--radius);
