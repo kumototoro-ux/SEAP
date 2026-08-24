@@ -43,7 +43,7 @@ async function handleAdd(req, res) {
   }
 
   const { error } = await supabaseAdmin.from('student_behavior').insert({
-    student_id: d.studentId, type: d.type, points: d.points, description: d.description,
+    student_id: d.studentId, type: d.type, points: Math.round(d.points), description: d.description,
     branch: d.branch, recorded_by: user.id,
   });
   if (error) throw error;
