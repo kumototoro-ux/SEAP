@@ -26,6 +26,11 @@ function checkEvaluatorAccess(evaluator, targetEmployee) {
     const allowedBranches = evaluator.allBranches || [evaluator.branch];
     if (allowedBranches.includes(targetEmployee.branch)) return; // 🆕 كل موظفي فروعه، لا المشرفين فقط
   }
+  // 🆕 محاولة وصول غير مصرَّح بها — تُسجَّل بسجل التتبّع بدل الرفض الصامت (مراقبة أمنية)
+  supabaseAdmin.from('audit_log').insert({
+    emp_id: evaluator.id, emp_name: evaluator.fullName, role: evaluator.role,
+    action: '⚠️ محاولة وصول غير مصرَّح بها (تقييم أداء)', details: { targetEmployeeId: targetEmployee.id, targetBranch: targetEmployee.branch }, branch: evaluator.branch,
+  }).then(() => {});
   const e = new Error('غير مصرَّح لك بتقييم هذا الموظف');
   e.statusCode = 403;
   throw e;
@@ -183,7 +188,17 @@ async function handleSaveEvaluation(req, res) {
   const weightedSum = d.scores.reduce((sum, s) => sum + s.score * (weightMap[s.criterionId] || 0), 0);
   const finalScore = totalWeight > 0 ? Math.round((weightedSum / totalWeight) * 100) / 100 : 0;
 
-  const { data: existingEval } = await supabaseAdmin.from('evaluations').select('id').eq('employee_id', d.employeeId).eq('cycle_id', d.cycleId).maybeSingle();
+  const { data: existingEval } = await supabaseAdmin.from('evaluations').select('id, created_at, evaluated_by').eq('employee_id', d.employeeId).eq('cycle_id', d.cycleId).maybeSingle();
+
+  // 🆕 مشرف المعلمين ومراقب الفروع: تعديل مسموح فقط خلال 24 ساعة من إنشاء التقييم — الأدمن بلا أي قيد
+  if (existingEval && user.role !== 'role_admin') {
+    const hoursPassed = (Date.now() - new Date(existingEval.created_at).getTime()) / (1000 * 60 * 60);
+    if (hoursPassed > 24) {
+      const err = new Error('انتهت مهلة تعديل هذا التقييم (24 ساعة من وقت الإنشاء) — تواصل مع الأدمن');
+      err.statusCode = 403;
+      throw err;
+    }
+  }
 
   let evaluationId;
   if (existingEval) {
@@ -214,22 +229,32 @@ async function handleSaveEvaluation(req, res) {
   return res.status(200).json({ success: true, data: { finalScore } });
 }
 
-/* -------------------- لوحة الإحصاءات (أدمن فقط) -------------------- */
+/* -------------------- لوحة الإحصاءات — مقيَّدة حسب دور الطالب (كل واحد يشوف نطاقه فقط) -------------------- */
 async function handleDashboardStats(req, res) {
   const user = requireAuth(req);
-  requireRole(user, ['role_admin']);
-  const { cycleId } = req.body;
+  requireRole(user, EVALUATOR_ROLES_); // 🆕 لم يعد أدمن فقط — كل مُقيِّم يشوف نطاقه
+  const { cycleId, branchFilter } = req.body; // branchFilter اختياري — للأدمن فقط (فرد/فرع/عدة فروع)
 
-  const { data: evals, error } = await supabaseAdmin
-    .from('evaluations').select('final_score, branch, employees(name_ar)')
-    .eq('cycle_id', cycleId);
+  let query = supabaseAdmin.from('evaluations').select('final_score, branch, employee_id, employees(name_ar, role)').eq('cycle_id', cycleId);
+
+  if (user.role === 'role_teacher_sup') {
+    query = query.eq('branch', user.branch); // نطاقه: فرعه فقط (المعلمون تحديداً — يُفلتَر بالدور بعد الجلب)
+  } else if (user.role === 'role_branch_monitor') {
+    query = query.in('branch', user.allBranches || [user.branch]); // نطاقه: كل فروعه
+  } else if (user.role === 'role_admin' && branchFilter && branchFilter.length) {
+    query = query.in('branch', branchFilter); // 🆕 الأدمن يقدر يخصِّص فرعاً أو عدة فروع، أو يتركه فارغاً = الكل
+  }
+
+  const { data: evals, error } = await query;
   if (error) throw error;
 
-  if (!evals.length) {
+  let withNames = evals.map((e) => ({ name: e.employees?.name_ar, score: Number(e.final_score), branch: e.branch, role: e.employees?.role }));
+  if (user.role === 'role_teacher_sup') withNames = withNames.filter((e) => e.role === 'role_teacher'); // 🆕 استثناء نفسه من نتائجه
+
+  if (!withNames.length) {
     return res.status(200).json({ success: true, data: { average: 0, count: 0, topPerformers: [], needsImprovement: [], byBranch: {} } });
   }
 
-  const withNames = evals.map((e) => ({ name: e.employees?.name_ar, score: Number(e.final_score), branch: e.branch }));
   const average = Math.round((withNames.reduce((s, e) => s + e.score, 0) / withNames.length) * 100) / 100;
   const sorted = [...withNames].sort((a, b) => b.score - a.score);
   const topPerformers = sorted.slice(0, 5);
@@ -246,6 +271,21 @@ async function handleDashboardStats(req, res) {
   return res.status(200).json({ success: true, data: { average, count: withNames.length, topPerformers, needsImprovement, byBranch } });
 }
 
+/* -------------------- حذف تقييم — أدمن فقط -------------------- */
+async function handleDeleteEvaluation(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { error } = await supabaseAdmin.from('evaluations').delete().eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role, action: 'حذف تقييم أداء', details: { evaluationId: id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
 export default createRouter({
   myEvaluations: handleMyEvaluations,
   listEvaluatable: handleListEvaluatable,
@@ -257,5 +297,6 @@ export default createRouter({
   closeCycle: handleCloseCycle,
   getEvaluation: handleGetEvaluation,
   saveEvaluation: handleSaveEvaluation,
+  deleteEvaluation: handleDeleteEvaluation,
   dashboardStats: handleDashboardStats,
 });
