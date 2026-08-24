@@ -1995,8 +1995,8 @@ async function renderStudentBehaviorView() {
 
   main.innerHTML = `
     <div class="card">
-      <h2>سلوك الطلاب</h2>
-      <p style="color:#888;font-size:12.5px;margin-top:-10px">ابحث عن طالب لعرض سجله وتسجيل موقف سلوكي جديد</p>
+      <h2 style="margin-bottom:4px">سلوك الطلاب</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:0">ابحث عن طالب لعرض سجل سلوكه الكامل وتسجيل موقف جديد</p>
       <div class="student-search-input-wrap">
         ${ICONS.search()}
         <input type="text" id="behaviorStudentSearch" placeholder="اكتب اسم الطالب...">
@@ -2040,35 +2040,55 @@ async function loadBehaviorForStudent() {
 
   const score = result.score;
   const scoreColor = score >= 90 ? '#2F7A4D' : score >= 60 ? '#B8860B' : '#C4483A';
+  const positiveCount = result.records.filter((r) => r.type === 'positive').length;
+  const negativeCount = result.records.filter((r) => r.type === 'negative').length;
 
   card.innerHTML = `
     <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-        <div>
-          <h2 style="margin-bottom:2px">${escapeHtml(student.name_ar)}</h2>
-          <p style="color:#888;margin:0;font-size:12.5px">${escapeHtml(student.grade)} — ${escapeHtml(student.section)} — ${escapeHtml(student.branch)}</p>
+      <div class="behavior-score-header">
+        <div class="behavior-student-info">
+          <span class="person-avatar" style="width:48px;height:48px;font-size:18px">${escapeHtml((student.name_ar || '؟').trim().charAt(0))}</span>
+          <div>
+            <h2 style="margin:0">${escapeHtml(student.name_ar)}</h2>
+            <p style="color:#888;margin:2px 0 0;font-size:12.5px">${escapeHtml(student.grade)} — ${escapeHtml(student.section)} — ${escapeHtml(student.branch)}</p>
+          </div>
         </div>
-        <div style="text-align:center">
-          <div style="font-size:32px;font-weight:800;color:${scoreColor}">${score}</div>
-          <div style="font-size:11px;color:var(--text-muted)">من 100${score >= 100 ? ' 🏆 شهادة سلوك' : ''}</div>
+        <div class="behavior-score-circle" style="border-color:${scoreColor}">
+          <span style="color:${scoreColor}">${score}</span>
+          <span class="behavior-score-sublabel">من 100</span>
         </div>
+      </div>
+      <div class="behavior-stats-row">
+        <div class="behavior-stat-chip behavior-stat-positive">${ICONS.plus()} ${positiveCount} موقف إيجابي</div>
+        <div class="behavior-stat-chip behavior-stat-negative">${ICONS.close()} ${negativeCount} موقف سلبي</div>
+        ${score >= 100 ? `<div class="behavior-stat-chip" style="background:#FFF3DE;color:#8a6d1f">🏆 مؤهَّل لشهادة سلوك</div>` : ''}
       </div>
     </div>
 
     <div class="card">
-      <h3>تسجيل موقف سلوكي جديد</h3>
-      <div class="field"><label>النوع</label>
-        <select id="beh_type"><option value="positive">إيجابي (+)</option><option value="negative">سلبي (-)</option></select>
+      <h3 style="margin-bottom:14px">تسجيل موقف سلوكي جديد</h3>
+      <div class="behavior-type-toggle">
+        <button type="button" class="behavior-type-btn active" data-behavior-type="positive">${ICONS.plus()} إيجابي</button>
+        <button type="button" class="behavior-type-btn" data-behavior-type="negative">${ICONS.close()} سلبي</button>
       </div>
-      <div class="field"><label>عدد النقاط</label><input type="number" id="beh_points" min="1" max="100" value="5"></div>
+      <input type="hidden" id="beh_type" value="positive">
+      <div class="field"><label>عدد النقاط</label><input type="number" id="beh_points" min="1" max="100" step="1" value="5"></div>
       <div class="field"><label>الوصف</label><input type="text" id="beh_description" placeholder="مثال: مساعدة زميل، تكرار عدم إحضار الواجب..."></div>
       <button type="button" id="beh_addBtn">تسجيل</button>
     </div>
 
     <div class="card">
-      <h3>السجل</h3>
+      <h3>السجل الكامل</h3>
       <div id="behaviorHistoryArea"></div>
     </div>`;
+
+  document.querySelectorAll('.behavior-type-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.behavior-type-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('beh_type').value = btn.getAttribute('data-behavior-type');
+    });
+  });
 
   renderBehaviorHistory(result.records);
 
@@ -2099,13 +2119,13 @@ function renderBehaviorHistory(records) {
   if (!records.length) { area.innerHTML = '<p style="color:#888">لا يوجد سجل بعد</p>'; return; }
 
   area.innerHTML = records.map((r) => `
-    <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface);align-items:flex-start">
-      <div>
-        <span style="font-weight:800;color:${r.type === 'positive' ? '#2F7A4D' : '#C4483A'}">${r.type === 'positive' ? '+' : '-'}${r.points}</span>
-        <span style="margin-right:8px;font-size:13px">${escapeHtml(r.description)}</span>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${new Date(r.recorded_at).toLocaleString('ar')}</div>
+    <div class="behavior-history-row ${r.type === 'positive' ? 'behavior-history-positive' : 'behavior-history-negative'}">
+      <div class="behavior-history-badge">${r.type === 'positive' ? '+' : '−'}${r.points}</div>
+      <div class="behavior-history-body">
+        <div class="behavior-history-desc">${escapeHtml(r.description)}</div>
+        <div class="behavior-history-date">${new Date(r.recorded_at).toLocaleString('ar')}</div>
       </div>
-      ${APP.user.role === 'role_admin' ? `<span data-del-behavior="${r.id}" style="cursor:pointer;color:#c62828;flex-shrink:0">${ICONS.trash()}</span>` : ''}
+      ${APP.user.role === 'role_admin' ? `<span data-del-behavior="${r.id}" class="behavior-history-delete">${ICONS.trash()}</span>` : ''}
     </div>`).join('');
 
   area.querySelectorAll('[data-del-behavior]').forEach((el) => {
@@ -2136,8 +2156,8 @@ async function renderPerformanceView() {
 
   const tabs = [
     { key: 'my', label: 'أدائي' },
-    ...(isEvaluator ? [{ key: 'evaluate', label: 'تقييم موظف' }] : []),
-    ...(isAdmin ? [{ key: 'dashboard', label: 'لوحة الإحصاءات' }, { key: 'criteria', label: 'معايير التقييم' }, { key: 'cycles', label: 'دورات التقييم' }] : []),
+    ...(isEvaluator ? [{ key: 'evaluate', label: 'تقييم موظف' }, { key: 'dashboard', label: 'لوحة الإحصاءات' }] : []),
+    ...(isAdmin ? [{ key: 'criteria', label: 'معايير التقييم' }, { key: 'cycles', label: 'دورات التقييم' }] : []),
   ];
 
   main.innerHTML = `
@@ -2265,6 +2285,7 @@ async function loadEvaluationForm(branch) {
 
       <div class="perf-final-score-box" id="perf_liveTotal"></div>
       <button type="button" id="perf_saveBtn" style="margin-top:14px;width:100%">${existing.evaluation ? 'تحديث التقييم' : 'حفظ التقييم'}</button>
+      ${existing.evaluation && APP.user.role === 'role_admin' ? `<button type="button" id="perf_deleteBtn" class="btn-danger-outline" style="margin-top:8px;width:100%">حذف هذا التقييم نهائياً</button>` : ''}
     </div>`;
 
   function recalcLiveTotal() {
@@ -2299,29 +2320,47 @@ async function loadEvaluationForm(branch) {
     } catch (e) { showToast(e.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = 'حفظ التقييم'; }
   });
+
+  document.getElementById('perf_deleteBtn')?.addEventListener('click', async () => {
+    if (!confirm('تأكيد حذف هذا التقييم نهائياً؟ لا يمكن التراجع.')) return;
+    try {
+      await apiCall('performance', { method: 'POST', body: { action: 'deleteEvaluation', id: existing.evaluation.id } });
+      showToast('تم الحذف بنجاح', 'success');
+      loadEvaluationForm(branch);
+    } catch (e) { showToast(e.message, 'error'); }
+  });
 }
 
 /* -------------------- لوحة الإحصاءات (أدمن) -------------------- */
 async function renderPerfDashboardSection(content) {
   const cycles = await apiCall('performance', { method: 'POST', body: { action: 'listCycles' } });
   if (!cycles.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا توجد دورات تقييم بعد</p></div>'; return; }
+  const isAdmin = APP.user.role === 'role_admin';
+  const settings = isAdmin ? await getSettingsOnce() : null;
 
   content.innerHTML = `
     <div class="card">
       <div class="field"><label>اختر الدورة</label><select id="perf_dashCycle">${cycles.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select></div>
+      ${isAdmin ? `
+      <div class="filter-card-title">تخصيص النطاق (اختياري — اتركه فارغاً لعرض الكل)</div>
+      <div class="checkbox-list" id="perf_dashBranchBox">${scopeCheckboxesHtml(settings.branches, [], 'perf-dash-branch-cb')}</div>
+      ` : ''}
+      <button type="button" id="perf_dashLoadBtn" style="margin-top:14px">عرض</button>
     </div>
     <div id="perfDashArea"></div>`;
 
-  document.getElementById('perf_dashCycle').addEventListener('change', loadPerfDashboard);
+  document.getElementById('perf_dashLoadBtn').addEventListener('click', loadPerfDashboard);
   loadPerfDashboard();
 }
 
 async function loadPerfDashboard() {
   const cycleId = document.getElementById('perf_dashCycle').value;
+  const isAdmin = APP.user.role === 'role_admin';
+  const branchFilter = isAdmin ? collectCheckedValues('.perf-dash-branch-cb') : undefined;
   const area = document.getElementById('perfDashArea');
   area.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
 
-  const stats = await apiCall('performance', { method: 'POST', body: { action: 'dashboardStats', cycleId } });
+  const stats = await apiCall('performance', { method: 'POST', body: { action: 'dashboardStats', cycleId, branchFilter } });
 
   area.innerHTML = `
     <div class="card">
