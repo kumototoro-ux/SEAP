@@ -82,18 +82,19 @@ const PAGE_REGISTRY = {
   staffAttendance: { label: 'تحضير الموظفين', icon: 'employees', render: renderStaffAttendanceView },
   studentBehavior: { label: 'سلوك الطلاب', icon: 'guardians', render: renderStudentBehaviorView },
   performance: { label: 'تقييم الأداء', icon: 'tasks', render: renderPerformanceView },
+  messages: { label: 'المراسلات', icon: 'messages', render: renderMessagesView },
 };
 
 /** 🆕 صلاحيات كل دور — مطابقة تماماً لمنطق ROLE_PAGES بمشروع GAS الأصلي،
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance'],
-  role_teacher: ['home', 'studentAttendance', 'performance'],
-  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior', 'performance'],
-  role_teacher_sup: ['home', 'staffAttendance', 'performance'],
-  Admission: ['home', 'students', 'parents', 'familyAccounts'],
-  role_branch_monitor: ['home', 'staffAttendance', 'performance'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'messages'],
+  role_teacher: ['home', 'studentAttendance', 'performance', 'messages'],
+  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior', 'performance', 'messages'],
+  role_teacher_sup: ['home', 'staffAttendance', 'performance', 'messages'],
+  Admission: ['home', 'students', 'parents', 'familyAccounts', 'messages'],
+  role_branch_monitor: ['home', 'staffAttendance', 'performance', 'messages'],
 };
 
 function pagesForCurrentUser() {
@@ -341,6 +342,13 @@ function renderShell() {
       branchLabel.textContent = APP.user.branch;
     }
   })();
+
+  // 🆕 عدد الرسائل غير المقروءة بالجرس — يتحدَّث عند كل تحميل للوحة
+  apiCall('audit-log', { method: 'POST', body: { action: 'unreadCount' } }).then((r) => {
+    const badge = document.getElementById('notifBadge');
+    if (badge && r.count > 0) badge.style.display = 'block';
+  }).catch(() => {});
+  document.getElementById('notifBtn').addEventListener('click', () => navigate('messages'));
 }
 
 function closeSidebarMobile() {
@@ -2256,9 +2264,25 @@ async function loadPerfRoster() {
             </div>
             <span class="status-badge ${r.evaluated ? 'status-badge-on' : 'status-badge-off'}">${r.evaluated ? r.score + '/100' : 'لم يُقيَّم بعد'}</span>
           </div>
+          <div class="person-card-footer">
+            <div class="person-card-actions">
+              <button type="button" class="btn-outline-sm" data-message-employee="${escapeHtml(r.id)}" data-message-name="${escapeHtml(r.name_ar)}" style="width:100%;justify-content:center">${ICONS.messages()} مراسلة</button>
+            </div>
+          </div>
         </div>`).join('')}
     </div>
   </div>`;
+
+  area.querySelectorAll('[data-message-employee]').forEach((btn) => {
+    btn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
+      openComposeMessageModal({
+        recipients: [{ id: btn.getAttribute('data-message-employee'), type: 'employee' }],
+        subject: 'بخصوص تقييم الأداء',
+        contextType: 'performance',
+      });
+    });
+  });
 
   area.querySelectorAll('[data-eval-employee]').forEach((card) => {
     card.addEventListener('click', async () => {
@@ -2586,6 +2610,229 @@ async function renderPerfCyclesSection(content) {
         renderPerfCyclesSection(content);
       } catch (e) { showToast(e.message, 'error'); }
     });
+  });
+}
+
+/* ===================== صفحة المراسلات ===================== */
+
+async function renderMessagesView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  const isAdmin = APP.user.role === 'role_admin';
+
+  main.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+        <h2 style="margin:0">المراسلات</h2>
+        <button type="button" id="composeNewBtn" style="width:auto">${ICONS.plus()} رسالة جديدة</button>
+      </div>
+      ${isAdmin ? `
+      <div class="segmented-control" id="msgTabBar" style="margin-top:14px">
+        <button type="button" class="segmented-item active" data-msg-tab="inbox">المراسلات</button>
+        <button type="button" class="segmented-item" data-msg-tab="terms">الكلمات الممنوعة</button>
+        <button type="button" class="segmented-item" data-msg-tab="blocked">الحسابات المحظورة</button>
+      </div>` : ''}
+    </div>
+    <div id="msgTabContent"></div>`;
+
+  document.getElementById('composeNewBtn').addEventListener('click', () => openComposeMessageModal());
+
+  if (isAdmin) {
+    document.querySelectorAll('#msgTabBar .segmented-item').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#msgTabBar .segmented-item').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        const tab = btn.getAttribute('data-msg-tab');
+        if (tab === 'inbox') renderMsgInboxTab();
+        else if (tab === 'terms') renderMsgTermsTab();
+        else if (tab === 'blocked') renderMsgBlockedTab();
+      });
+    });
+  }
+  renderMsgInboxTab();
+}
+
+function renderMsgInboxTab() {
+  document.getElementById('msgTabContent').innerHTML = `<div id="threadsListArea"><div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div></div>`;
+  loadMyThreads();
+}
+
+async function renderMsgTermsTab() {
+  const content = document.getElementById('msgTabContent');
+  const terms = await apiCall('audit-log', { method: 'POST', body: { action: 'listBlockedTerms' } });
+  content.innerHTML = `
+    <div class="card">
+      <h3>إضافة كلمة ممنوعة</h3>
+      <p style="color:#888;font-size:12px;margin-top:-8px">أي رسالة تحتوي هذي الكلمة تُرفَض تلقائياً، ومُرسِلها يُحظَر فوراً</p>
+      <div class="student-search-input-wrap"><input type="text" id="newTermInput" placeholder="اكتب الكلمة..."></div>
+      <button type="button" id="addTermBtn" style="margin-top:10px">إضافة</button>
+    </div>
+    <div class="card">
+      <h3>القائمة الحالية (${terms.length})</h3>
+      <div class="student-chip-list">${terms.map((t) => `<span class="student-chip">${escapeHtml(t.term)}<span data-del-term="${t.id}" class="student-chip-remove">${ICONS.close()}</span></span>`).join('') || '<span class="student-linker-empty">لا توجد كلمات بعد</span>'}</div>
+    </div>`;
+
+  document.getElementById('addTermBtn').addEventListener('click', async () => {
+    const term = document.getElementById('newTermInput').value.trim();
+    if (!term) return;
+    try {
+      await apiCall('audit-log', { method: 'POST', body: { action: 'addBlockedTerm', term } });
+      renderMsgTermsTab();
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+  content.querySelectorAll('[data-del-term]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      await apiCall('audit-log', { method: 'POST', body: { action: 'deleteBlockedTerm', id: el.getAttribute('data-del-term') } });
+      renderMsgTermsTab();
+    });
+  });
+}
+
+async function renderMsgBlockedTab() {
+  const content = document.getElementById('msgTabContent');
+  const blocked = await apiCall('audit-log', { method: 'POST', body: { action: 'listBlockedSenders' } });
+  content.innerHTML = `<div class="card"><h3>الحسابات المحظورة حالياً</h3>
+    ${blocked.map((b) => `
+      <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface);align-items:flex-start">
+        <div>
+          <div style="font-weight:700;font-size:13px">${escapeHtml(b.person_id)}</div>
+          <div style="font-size:11.5px;color:#C4483A;margin-top:2px">"${escapeHtml(b.flagged_message || '')}"</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${new Date(b.blocked_at).toLocaleString('ar')}</div>
+        </div>
+        <button type="button" class="btn-outline-sm" data-unblock="${b.id}" style="width:auto">رفع الحظر</button>
+      </div>`).join('') || '<p style="color:#888">لا يوجد أحد محظور حالياً</p>'}
+    </div>`;
+
+  content.querySelectorAll('[data-unblock]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('تأكيد رفع الحظر عن هذا الحساب؟')) return;
+      await apiCall('audit-log', { method: 'POST', body: { action: 'unblockSender', id: btn.getAttribute('data-unblock') } });
+      renderMsgBlockedTab();
+    });
+  });
+}
+
+async function loadMyThreads() {
+  const area = document.getElementById('threadsListArea');
+  const threads = await apiCall('audit-log', { method: 'POST', body: { action: 'listMyThreads' } });
+
+  if (!threads.length) { area.innerHTML = '<div class="card"><p style="color:#888">لا توجد مراسلات بعد</p></div>'; return; }
+
+  area.innerHTML = `<div class="card">${threads.map((t) => `
+    <div class="person-card-row" data-open-thread="${t.id}" style="padding:12px 0;border-bottom:1px solid var(--surface);cursor:pointer">
+      <div>
+        <div style="font-weight:700;font-size:13.5px">${escapeHtml(t.subject)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${new Date(t.created_at).toLocaleString('ar')}</div>
+      </div>
+      <span>${ICONS.chevronDown()}</span>
+    </div>`).join('')}</div>`;
+
+  area.querySelectorAll('[data-open-thread]').forEach((el) => {
+    el.addEventListener('click', () => openThreadView(el.getAttribute('data-open-thread')));
+  });
+}
+
+async function openThreadView(threadId) {
+  const messages = await apiCall('audit-log', { method: 'POST', body: { action: 'getThread', threadId } });
+
+  const { close } = showDetailModal('المحادثة', null, []);
+  const body = document.getElementById('modalBodyContent');
+  body.innerHTML = `
+    <div id="threadMessagesArea" style="max-height:320px;overflow-y:auto;margin-bottom:14px"></div>
+    <div class="student-search-input-wrap">
+      <input type="text" id="threadReplyInput" placeholder="اكتب ردّك...">
+    </div>
+    <button type="button" id="threadReplyBtn" style="margin-top:10px;width:100%">إرسال</button>`;
+
+  document.getElementById('threadMessagesArea').innerHTML = messages.map((m) => `
+    <div style="text-align:${m.sender_id === APP.user.id ? 'left' : 'right'};margin-bottom:10px">
+      <div style="display:inline-block;max-width:80%;padding:8px 12px;border-radius:12px;background:${m.sender_id === APP.user.id ? 'var(--accent-green)' : 'var(--surface)'};font-size:13px">
+        ${escapeHtml(m.body)}
+      </div>
+      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${new Date(m.created_at).toLocaleString('ar')}${m.is_original ? ' 📌' : ''}</div>
+    </div>`).join('');
+
+  document.getElementById('threadReplyBtn').addEventListener('click', async () => {
+    const input = document.getElementById('threadReplyInput');
+    const text = input.value.trim();
+    if (!text) return;
+    try {
+      await apiCall('audit-log', { method: 'POST', body: { action: 'reply', threadId, body: text } });
+      input.value = '';
+      close();
+      openThreadView(threadId);
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+}
+
+/** 🆕 نافذة إنشاء رسالة جديدة — قابلة للاستدعاء من أي مكان بالتطبيق (بطاقة موظف، تقييم، سلوك...)
+ * prefill اختياري: { recipients: [{id,type}], subject, contextType, contextId } */
+function openComposeMessageModal(prefill) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay show';
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3>رسالة جديدة</h3>
+        <button type="button" class="modal-close-btn" id="composeCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>الموضوع</label><input type="text" id="compose_subject" value="${escapeHtml(prefill?.subject || '')}"></div>
+        ${!prefill?.recipients ? `
+        <div class="field"><label>المستلم (اكتب اسم موظف)</label><input type="text" id="compose_recipientSearch" placeholder="ابحث بالاسم..."></div>
+        <div id="compose_recipientResults" class="student-search-results"></div>
+        <div id="compose_selectedRecipient" style="margin:8px 0;font-size:12.5px;color:var(--text-muted)">لم يُحدَّد مستلم بعد</div>
+        ` : `<p style="font-size:12.5px;color:var(--text-muted)">سيصل هذا لجهة الاختصاص المرتبطة بهذا السجل</p>`}
+        <div class="field"><label>الرسالة</label><textarea id="compose_body" rows="4"></textarea></div>
+        <button type="button" id="composeSendBtn" style="width:100%">إرسال</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('composeCloseBtn').addEventListener('click', close);
+
+  let selectedRecipients = prefill?.recipients || [];
+
+  if (!prefill?.recipients) {
+    document.getElementById('compose_recipientSearch').addEventListener('input', async (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      const box = document.getElementById('compose_recipientResults');
+      if (q.length < 2) { box.innerHTML = ''; box.classList.remove('show'); return; }
+      if (!APP.allEmployees || !APP.allEmployees.length) {
+        try { APP.allEmployees = await apiCall('employees', { method: 'POST', body: { action: 'list' } }); } catch (err) { APP.allEmployees = []; }
+      }
+      const matches = APP.allEmployees.filter((emp) => emp.name_ar.toLowerCase().includes(q)).slice(0, 6);
+      box.classList.add('show');
+      box.innerHTML = matches.map((emp) => `<div class="search-result-item" data-pick-recipient="${escapeHtml(emp.id)}"><div class="search-result-label">${escapeHtml(emp.name_ar)}</div></div>`).join('') || '<p style="padding:10px;color:#aaa;font-size:12px">لا نتائج</p>';
+      box.querySelectorAll('[data-pick-recipient]').forEach((el) => {
+        el.addEventListener('click', () => {
+          const emp = APP.allEmployees.find((x) => x.id === el.getAttribute('data-pick-recipient'));
+          selectedRecipients = [{ id: emp.id, type: 'employee' }];
+          document.getElementById('compose_selectedRecipient').textContent = 'المستلم: ' + emp.name_ar;
+          box.innerHTML = ''; box.classList.remove('show');
+          document.getElementById('compose_recipientSearch').value = '';
+        });
+      });
+    });
+  }
+
+  document.getElementById('composeSendBtn').addEventListener('click', async () => {
+    const subject = document.getElementById('compose_subject').value.trim();
+    const bodyText = document.getElementById('compose_body').value.trim();
+    if (!subject || !bodyText || !selectedRecipients.length) { showToast('أكمل كل الحقول واختر مستلماً', 'error'); return; }
+    const btn = document.getElementById('composeSendBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الإرسال...';
+    try {
+      await apiCall('audit-log', {
+        method: 'POST',
+        body: { action: 'sendMessage', subject, body: bodyText, recipients: selectedRecipients, contextType: prefill?.contextType, contextId: prefill?.contextId },
+      });
+      showToast('تم الإرسال بنجاح', 'success');
+      close();
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { btn.disabled = false; btn.textContent = 'إرسال'; }
   });
 }
 
