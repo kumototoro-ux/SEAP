@@ -13,11 +13,12 @@ import { createRouter } from '../lib/router.js';
 import { validateBody, addStudentSchema, updateStudentSchema } from '../lib/validation.js';
 import { generateStudentId } from '../lib/idGenerator.js';
 
-const STUDENT_MANAGE_ROLES_ = ['role_admin', 'Admission'];
+const STUDENT_MANAGE_ROLES_ = ['role_admin', 'Admission', 'role_student_sup'];
 
 /* -------------------- قائمة الطلاب -------------------- */
 async function handleList(req, res) {
-  requireAuth(req);
+  const user = requireAuth(req);
+  requireRole(user, STUDENT_MANAGE_ROLES_); // 🆕 كان مفقوداً — نفس ثغرة الموظفين بالضبط
   const { data, error } = await supabaseAdmin
     .from('students')
     .select('id, national_id, name_ar, name_en, nationality, date_of_birth, gender, branch, stage, grade, section, subjects, fee_status, created_at')
