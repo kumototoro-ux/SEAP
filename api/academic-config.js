@@ -81,7 +81,7 @@ async function handleSaveGradeDistForSubject(req, res) {
   }
 
   await supabaseAdmin.from('grade_distribution').delete().eq('subject', d.subject);
-  const rows = d.entries.map((e) => ({ subject: d.subject, eval_type: e.evalType, max_score: e.maxScore }));
+  const rows = d.entries.map((e) => ({ subject: d.subject, eval_type: e.evalType, max_grade: e.maxScore }));
   const { error } = await supabaseAdmin.from('grade_distribution').insert(rows);
   if (error) throw error;
 
