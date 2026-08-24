@@ -23,6 +23,7 @@ async function handleList(req, res) {
   const { data, error } = await supabaseAdmin
     .from('parent_info')
     .select('id, national_id, name_ar, name_en, phone, branch, created_at, parent_student_links(relationship, students(id, name_ar))')
+    .is('deleted_at', null)
     .order('created_at', { ascending: false });
   if (error) throw error;
 
@@ -42,7 +43,7 @@ async function handleAdd(req, res) {
   requireRole(user, PARENT_MANAGE_ROLES_);
   const d = validateBody(addParentSchema, req.body);
 
-  const { data: existing } = await supabaseAdmin.from('parent_info').select('id').eq('national_id', d.nationalId).maybeSingle();
+  const { data: existing } = await supabaseAdmin.from('parent_info').select('id').eq('national_id', d.nationalId).is('deleted_at', null).maybeSingle();
   if (existing) {
     const err = new Error('رقم الهوية هذا مسجَّل بالفعل لولي أمر آخر');
     err.statusCode = 409;
@@ -90,7 +91,7 @@ async function handleUpdate(req, res) {
   const { id } = validateBody(z.object({ id: z.string().min(1) }).passthrough(), req.body);
   const d = validateBody(updateParentSchema, req.body);
 
-  const { data: existing, error: findError } = await supabaseAdmin.from('parent_info').select('id').eq('id', id).maybeSingle();
+  const { data: existing, error: findError } = await supabaseAdmin.from('parent_info').select('id').eq('id', id).is('deleted_at', null).maybeSingle();
   if (findError) throw findError;
   if (!existing) {
     const err = new Error('ولي الأمر غير موجود');
@@ -136,8 +137,9 @@ async function handleDelete(req, res) {
     throw err;
   }
 
-  const { error } = await supabaseAdmin.from('parent_info').delete().eq('id', id);
+  const { error } = await supabaseAdmin.from('parent_info').update({ deleted_at: new Date().toISOString() }).eq('id', id);
   if (error) throw error;
+  await supabaseAdmin.from('family_accounts').update({ status: 'غير نشط' }).eq('parent_id', id);
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
