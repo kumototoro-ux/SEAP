@@ -19,6 +19,7 @@ async function handleList(req, res) {
   const { data, error } = await supabaseAdmin
     .from('employees')
     .select('id, national_id, name_ar, name_en, user_type, role, gender, branch, stage, grades, sections, subjects, created_at, employee_branches(branch)')
+    .is('deleted_at', null) // 🆕 يستثني الموظفين المحذوفين (Soft Delete) تلقائياً
     .order('created_at', { ascending: false });
   if (error) throw error;
 
@@ -36,7 +37,7 @@ async function handleAdd(req, res) {
   requireRole(user, ['role_admin']);
   const d = validateBody(addEmployeeSchema, req.body);
 
-  const { data: existing } = await supabaseAdmin.from('employees').select('id').eq('national_id', d.nationalId).maybeSingle();
+  const { data: existing } = await supabaseAdmin.from('employees').select('id').eq('national_id', d.nationalId).is('deleted_at', null).maybeSingle();
   if (existing) {
     const err = new Error('رقم الهوية هذا مسجَّل بالفعل لموظف آخر');
     err.statusCode = 409;
@@ -79,7 +80,7 @@ async function handleUpdate(req, res) {
   const { id } = validateBody(z.object({ id: z.string().min(1) }).passthrough(), req.body);
   const d = validateBody(updateEmployeeSchema, req.body);
 
-  const { data: existing, error: findError } = await supabaseAdmin.from('employees').select('id').eq('id', id).maybeSingle();
+  const { data: existing, error: findError } = await supabaseAdmin.from('employees').select('id').eq('id', id).is('deleted_at', null).maybeSingle();
   if (findError) throw findError;
   if (!existing) {
     const err = new Error('الموظف غير موجود');
@@ -122,8 +123,10 @@ async function handleDelete(req, res) {
     throw err;
   }
 
-  const { error } = await supabaseAdmin.from('employees').delete().eq('id', id);
+  // 🆕 حذف آمن (Soft Delete) — نُعلِّم الصف بتاريخ حذف بدل مسحه نهائياً، ونعطِّل حساب دخوله للحماية الفورية
+  const { error } = await supabaseAdmin.from('employees').update({ deleted_at: new Date().toISOString() }).eq('id', id);
   if (error) throw error;
+  await supabaseAdmin.from('users').update({ status: 'inactive' }).eq('id', id);
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
