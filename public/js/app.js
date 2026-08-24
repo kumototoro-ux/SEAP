@@ -80,15 +80,16 @@ const PAGE_REGISTRY = {
   siteSettings: { label: 'الإعدادات', icon: 'settingsGear', render: renderSiteSettingsView },
   studentAttendance: { label: 'تحضير الطلاب', icon: 'students', render: renderStudentAttendanceView },
   staffAttendance: { label: 'تحضير الموظفين', icon: 'employees', render: renderStaffAttendanceView },
+  studentBehavior: { label: 'سلوك الطلاب', icon: 'guardians', render: renderStudentBehaviorView },
 };
 
 /** 🆕 صلاحيات كل دور — مطابقة تماماً لمنطق ROLE_PAGES بمشروع GAS الأصلي،
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance', 'studentBehavior'],
   role_teacher: ['home', 'studentAttendance'],
-  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance'],
+  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'],
   role_teacher_sup: ['home', 'staffAttendance'],
   Admission: ['home', 'students', 'parents', 'familyAccounts'],
   role_branch_monitor: ['home', 'staffAttendance'],
@@ -1911,16 +1912,40 @@ async function loadAttendanceRoster(personType) {
   if (!roster.length) { showToast('لا يوجد أشخاص مطابقون لهذا الاختيار', 'error'); return; }
 
   document.getElementById('att_rosterCard').style.display = 'block';
-  document.getElementById('att_rosterArea').innerHTML = roster.map((p) => {
-    const rec = existingMap[p.id];
-    return `
-      <div class="person-card-row" data-person-id="${escapeHtml(p.id)}" data-record-id="${rec ? rec.id : ''}" style="padding:10px 0;border-bottom:1px solid var(--surface)">
-        <span>${escapeHtml(p.name_ar)}</span>
-        <select class="att-status-select" style="width:auto;min-width:120px">
-          ${statuses.map((st) => `<option value="${escapeHtml(st)}" ${rec && rec.status === st ? 'selected' : ''}>${escapeHtml(st)}</option>`).join('')}
-        </select>
+  document.getElementById('att_rosterArea').innerHTML = `
+    <div class="att-quick-mark">
+      <span>تعليم الكل:</span>
+      ${statuses.map((st) => `<button type="button" class="att-quick-btn" data-quick-mark="${escapeHtml(st)}">${escapeHtml(st)}</button>`).join('')}
+    </div>
+    ${roster.map((p) => {
+      const rec = existingMap[p.id];
+      return `
+      <div class="person-card-row att-roster-row" data-person-id="${escapeHtml(p.id)}" data-record-id="${rec ? rec.id : ''}" data-status="${rec ? escapeHtml(rec.status) : ''}">
+        <span class="att-person-name">${escapeHtml(p.name_ar)}</span>
+        <div class="att-status-buttons">
+          ${statuses.map((st) => `<button type="button" class="att-status-btn ${rec && rec.status === st ? 'active' : ''}" data-status-value="${escapeHtml(st)}">${escapeHtml(st)}</button>`).join('')}
+        </div>
       </div>`;
-  }).join('');
+    }).join('')}`;
+
+  document.querySelectorAll('.att-status-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('.att-roster-row');
+      row.setAttribute('data-status', btn.getAttribute('data-status-value'));
+      row.querySelectorAll('.att-status-btn').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  document.querySelectorAll('[data-quick-mark]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const status = btn.getAttribute('data-quick-mark');
+      document.querySelectorAll('.att-roster-row').forEach((row) => {
+        row.setAttribute('data-status', status);
+        row.querySelectorAll('.att-status-btn').forEach((b) => b.classList.toggle('active', b.getAttribute('data-status-value') === status));
+      });
+    });
+  });
 
   document.getElementById('att_saveBtn').onclick = () => saveAttendanceRoster(personType);
 }
@@ -1932,9 +1957,11 @@ async function saveAttendanceRoster(personType) {
   btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
 
   const rows = document.querySelectorAll('#att_rosterArea [data-person-id]');
+  const missingStatus = Array.from(rows).find((r) => !r.getAttribute('data-status'));
+  if (missingStatus) { showToast('حدّد حالة كل شخص قبل الحفظ', 'error'); btn.disabled = false; btn.textContent = 'حفظ الحضور'; return; }
   const entries = Array.from(rows).map((row) => ({
     personId: row.getAttribute('data-person-id'),
-    status: row.querySelector('.att-status-select').value,
+    status: row.getAttribute('data-status'),
   }));
 
   const body = { date, personType, branch, entries };
@@ -1950,6 +1977,145 @@ async function saveAttendanceRoster(personType) {
     showToast('تم حفظ الحضور بنجاح', 'success');
   } catch (e) { showToast(e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = 'حفظ الحضور'; }
+}
+
+/* ===================== صفحة سلوك الطلاب ===================== */
+
+let behaviorSelectedStudentId = null;
+
+async function renderStudentBehaviorView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  behaviorSelectedStudentId = null;
+
+  if (!APP.allStudents || !APP.allStudents.length) {
+    APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+  }
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>سلوك الطلاب</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">ابحث عن طالب لعرض سجله وتسجيل موقف سلوكي جديد</p>
+      <div class="student-search-input-wrap">
+        ${ICONS.search()}
+        <input type="text" id="behaviorStudentSearch" placeholder="اكتب اسم الطالب...">
+      </div>
+      <div id="behaviorStudentResults" class="student-search-results"></div>
+    </div>
+    <div id="behaviorDetailCard"></div>`;
+
+  document.getElementById('behaviorStudentSearch').addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    const box = document.getElementById('behaviorStudentResults');
+    if (!q) { box.classList.remove('show'); box.innerHTML = ''; return; }
+    const matches = APP.allStudents.filter((s) => s.name_ar.toLowerCase().includes(q)).slice(0, 8);
+    box.classList.add('show');
+    box.innerHTML = matches.map((s) => `
+      <div class="student-search-result-item" data-select-student="${escapeHtml(s.id)}">
+        <span class="person-avatar" style="width:32px;height:32px;font-size:13px">${escapeHtml((s.name_ar || '؟').trim().charAt(0))}</span>
+        <div><div class="search-result-label">${escapeHtml(s.name_ar)}</div><div class="search-result-sublabel">${escapeHtml(s.grade)} — ${escapeHtml(s.section)} — ${escapeHtml(s.branch)}</div></div>
+      </div>`).join('') || '<p style="padding:12px;color:#aaa;font-size:12.5px;text-align:center">لا نتائج</p>';
+
+    box.querySelectorAll('[data-select-student]').forEach((el) => {
+      el.addEventListener('click', () => {
+        behaviorSelectedStudentId = el.getAttribute('data-select-student');
+        document.getElementById('behaviorStudentSearch').value = '';
+        box.innerHTML = ''; box.classList.remove('show');
+        loadBehaviorForStudent();
+      });
+    });
+  });
+}
+
+async function loadBehaviorForStudent() {
+  const student = APP.allStudents.find((s) => s.id === behaviorSelectedStudentId);
+  const card = document.getElementById('behaviorDetailCard');
+  card.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  let result;
+  try {
+    result = await apiCall('behavior', { method: 'POST', body: { action: 'listForStudent', studentId: behaviorSelectedStudentId } });
+  } catch (e) { card.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`; return; }
+
+  const score = result.score;
+  const scoreColor = score >= 90 ? '#2F7A4D' : score >= 60 ? '#B8860B' : '#C4483A';
+
+  card.innerHTML = `
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div>
+          <h2 style="margin-bottom:2px">${escapeHtml(student.name_ar)}</h2>
+          <p style="color:#888;margin:0;font-size:12.5px">${escapeHtml(student.grade)} — ${escapeHtml(student.section)} — ${escapeHtml(student.branch)}</p>
+        </div>
+        <div style="text-align:center">
+          <div style="font-size:32px;font-weight:800;color:${scoreColor}">${score}</div>
+          <div style="font-size:11px;color:var(--text-muted)">من 100${score >= 100 ? ' 🏆 شهادة سلوك' : ''}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>تسجيل موقف سلوكي جديد</h3>
+      <div class="field"><label>النوع</label>
+        <select id="beh_type"><option value="positive">إيجابي (+)</option><option value="negative">سلبي (-)</option></select>
+      </div>
+      <div class="field"><label>عدد النقاط</label><input type="number" id="beh_points" min="1" max="100" value="5"></div>
+      <div class="field"><label>الوصف</label><input type="text" id="beh_description" placeholder="مثال: مساعدة زميل، تكرار عدم إحضار الواجب..."></div>
+      <button type="button" id="beh_addBtn">تسجيل</button>
+    </div>
+
+    <div class="card">
+      <h3>السجل</h3>
+      <div id="behaviorHistoryArea"></div>
+    </div>`;
+
+  renderBehaviorHistory(result.records);
+
+  document.getElementById('beh_addBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('beh_addBtn');
+    const description = document.getElementById('beh_description').value.trim();
+    if (!description) { showToast('الوصف مطلوب', 'error'); return; }
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    try {
+      await apiCall('behavior', {
+        method: 'POST',
+        body: {
+          action: 'add', studentId: behaviorSelectedStudentId, branch: student.branch,
+          type: document.getElementById('beh_type').value,
+          points: Number(document.getElementById('beh_points').value),
+          description,
+        },
+      });
+      showToast('تم التسجيل بنجاح', 'success');
+      loadBehaviorForStudent();
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { btn.disabled = false; btn.textContent = 'تسجيل'; }
+  });
+}
+
+function renderBehaviorHistory(records) {
+  const area = document.getElementById('behaviorHistoryArea');
+  if (!records.length) { area.innerHTML = '<p style="color:#888">لا يوجد سجل بعد</p>'; return; }
+
+  area.innerHTML = records.map((r) => `
+    <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface);align-items:flex-start">
+      <div>
+        <span style="font-weight:800;color:${r.type === 'positive' ? '#2F7A4D' : '#C4483A'}">${r.type === 'positive' ? '+' : '-'}${r.points}</span>
+        <span style="margin-right:8px;font-size:13px">${escapeHtml(r.description)}</span>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${new Date(r.recorded_at).toLocaleString('ar')}</div>
+      </div>
+      ${APP.user.role === 'role_admin' ? `<span data-del-behavior="${r.id}" style="cursor:pointer;color:#c62828;flex-shrink:0">${ICONS.trash()}</span>` : ''}
+    </div>`).join('');
+
+  area.querySelectorAll('[data-del-behavior]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      if (!confirm('تأكيد حذف هذا السجل؟')) return;
+      try {
+        await apiCall('behavior', { method: 'POST', body: { action: 'delete', id: el.getAttribute('data-del-behavior') } });
+        loadBehaviorForStudent();
+      } catch (e) { showToast(e.message, 'error'); }
+    });
+  });
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
