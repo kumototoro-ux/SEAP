@@ -237,6 +237,18 @@ button:disabled { opacity: .5; cursor: wait; }
 .att-status-btn { background: var(--surface); border: 1.5px solid var(--outline); border-radius: 999px; padding: 6px 14px; font-size: 12px; font-weight: 700; color: var(--text-muted); cursor: pointer; }
 .att-status-btn.active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
+/* ---------- 🆕 نموذج تقييم الأداء الاحترافي — بطاقة لكل معيار مع منزلق تفاعلي ---------- */
+.perf-criterion-card { background: var(--surface); border: 1px solid var(--outline); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 10px; }
+.perf-criterion-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.perf-criterion-name { font-weight: 700; font-size: 13.5px; color: var(--primary); }
+.perf-criterion-slider-row { display: flex; align-items: center; gap: 12px; }
+.perf-criterion-slider-row input[type="range"] { flex: 1; accent-color: var(--primary); height: 4px; }
+.perf-score-value { font-weight: 800; font-size: 15px; color: var(--primary); min-width: 32px; text-align: center; background: var(--surface-card); border-radius: 999px; padding: 4px 8px; }
+.perf-final-score-box {
+  display: flex; justify-content: space-between; align-items: center; margin-top: 20px; padding: 16px;
+  background: var(--surface); border-radius: var(--radius-sm); border: 2px solid var(--outline); font-weight: 700; font-size: 13.5px;
+}
+
 /* ---------- 🆕 مكوّن ربط الطلاب بولي الأمر — حاوية أنيقة موحَّدة ---------- */
 .student-linker-box {
   background: var(--surface); border: 1px solid var(--outline); border-radius: var(--radius);
