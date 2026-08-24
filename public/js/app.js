@@ -78,18 +78,20 @@ const PAGE_REGISTRY = {
   users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
   auditLog: { label: 'سجل التتبّع', icon: 'lock', render: renderAuditLogView },
   siteSettings: { label: 'الإعدادات', icon: 'settingsGear', render: renderSiteSettingsView },
+  studentAttendance: { label: 'تحضير الطلاب', icon: 'students', render: renderStudentAttendanceView },
+  staffAttendance: { label: 'تحضير الموظفين', icon: 'employees', render: renderStaffAttendanceView },
 };
 
 /** 🆕 صلاحيات كل دور — مطابقة تماماً لمنطق ROLE_PAGES بمشروع GAS الأصلي،
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
-  role_teacher: ['home'],
-  role_student_sup: ['home', 'students', 'parents', 'familyAccounts'],
-  role_teacher_sup: ['home'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance'],
+  role_teacher: ['home', 'studentAttendance'],
+  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance'],
+  role_teacher_sup: ['home', 'staffAttendance'],
   Admission: ['home', 'students', 'parents', 'familyAccounts'],
-  role_branch_monitor: ['home'],
+  role_branch_monitor: ['home', 'staffAttendance'],
 };
 
 function pagesForCurrentUser() {
@@ -1802,6 +1804,152 @@ function renderAuditLogTable() {
       </div>
       <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${new Date(r.timestamp).toLocaleString('ar')}</span>
     </div>`).join('');
+}
+
+/* ===================== صفحة تحضير الطلاب ===================== */
+
+function todayISO() { return new Date().toISOString().slice(0, 10); }
+
+async function renderStudentAttendanceView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  const settings = await getSettingsOnce();
+  const role = APP.user.role;
+
+  const branchLocked = role !== 'role_admin';
+  const branchOptions = role === 'role_admin' ? settings.branches : [APP.user.branch];
+  const gradeOptions = role === 'role_teacher' ? (APP.user.grades || []) : settings.grades;
+  const sectionOptions = role === 'role_teacher' ? (APP.user.sections || []) : settings.sections;
+
+  if (role === 'role_teacher' && (!gradeOptions.length || !sectionOptions.length)) {
+    main.innerHTML = `<div class="card"><p style="color:#888">لم تُسنَد لك صفوف/شعب بعد — راجع الإدارة.</p></div>`;
+    return;
+  }
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>تحضير الطلاب</h2>
+      <div class="field"><label>التاريخ</label><input type="date" id="att_date" value="${todayISO()}"></div>
+      <div class="field"><label>الفرع</label><select id="att_branch" ${branchLocked ? 'disabled' : ''}>${branchOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>الصف</label><select id="att_grade">${gradeOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="att_section">${sectionOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <button type="button" id="att_loadBtn">تحميل قائمة الطلاب</button>
+    </div>
+    <div class="card" id="att_rosterCard" style="display:none">
+      <h3>قائمة الطلاب</h3>
+      <div id="att_rosterArea"></div>
+      <button type="button" id="att_saveBtn" style="margin-top:14px">حفظ الحضور</button>
+    </div>`;
+
+  document.getElementById('att_loadBtn').addEventListener('click', () => loadAttendanceRoster('student'));
+}
+
+/* ===================== صفحة تحضير الموظفين ===================== */
+
+async function renderStaffAttendanceView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  const settings = await getSettingsOnce();
+  const role = APP.user.role;
+
+  let branchOptions, branchLocked, targetRoleOptions, targetRoleLocked;
+  if (role === 'role_admin') {
+    branchOptions = settings.branches; branchLocked = false;
+    targetRoleOptions = [{ v: 'role_teacher', l: 'معلمون' }, { v: 'role_teacher_sup', l: 'مشرفو معلمين' }, { v: 'role_student_sup', l: 'مشرفو طلاب' }];
+    targetRoleLocked = false;
+  } else if (role === 'role_teacher_sup') {
+    branchOptions = [APP.user.branch]; branchLocked = true;
+    targetRoleOptions = [{ v: 'role_teacher', l: 'معلمون' }]; targetRoleLocked = true;
+  } else { // role_branch_monitor
+    branchOptions = APP.user.allBranches || [APP.user.branch]; branchLocked = branchOptions.length <= 1;
+    targetRoleOptions = [{ v: 'role_teacher_sup', l: 'مشرفو معلمين' }, { v: 'role_student_sup', l: 'مشرفو طلاب' }];
+    targetRoleLocked = false;
+  }
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>تحضير الموظفين</h2>
+      <div class="field"><label>التاريخ</label><input type="date" id="att_date" value="${todayISO()}"></div>
+      <div class="field"><label>الفرع</label><select id="att_branch" ${branchLocked ? 'disabled' : ''}>${branchOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>الفئة</label><select id="att_targetRole" ${targetRoleLocked ? 'disabled' : ''}>${targetRoleOptions.map((o) => `<option value="${o.v}">${escapeHtml(o.l)}</option>`).join('')}</select></div>
+      <button type="button" id="att_loadBtn">تحميل القائمة</button>
+    </div>
+    <div class="card" id="att_rosterCard" style="display:none">
+      <h3>القائمة</h3>
+      <div id="att_rosterArea"></div>
+      <button type="button" id="att_saveBtn" style="margin-top:14px">حفظ الحضور</button>
+    </div>`;
+
+  document.getElementById('att_loadBtn').addEventListener('click', () => loadAttendanceRoster('employee'));
+}
+
+/* ===================== منطق مشترك بين الصفحتين ===================== */
+
+async function loadAttendanceRoster(personType) {
+  const date = document.getElementById('att_date').value;
+  const branch = document.getElementById('att_branch').value;
+  const settings = await getSettingsOnce();
+  const statuses = settings.attendanceStatuses;
+
+  let roster, existing;
+  try {
+    if (personType === 'student') {
+      const grade = document.getElementById('att_grade').value;
+      const section = document.getElementById('att_section').value;
+      roster = await apiCall('attendance', { method: 'POST', body: { action: 'listStudentRoster', branch, grade, section } });
+      existing = await apiCall('attendance', { method: 'POST', body: { action: 'listForDate', date, personType, branch, grade, section } });
+    } else {
+      const targetRole = document.getElementById('att_targetRole').value;
+      roster = await apiCall('attendance', { method: 'POST', body: { action: 'listStaffRoster', branch, targetRole } });
+      existing = await apiCall('attendance', { method: 'POST', body: { action: 'listForDate', date, personType, branch, targetRole } });
+    }
+  } catch (e) { showToast(e.message, 'error'); return; }
+
+  const existingMap = {};
+  existing.forEach((r) => { existingMap[r.person_id] = r; });
+
+  if (!roster.length) { showToast('لا يوجد أشخاص مطابقون لهذا الاختيار', 'error'); return; }
+
+  document.getElementById('att_rosterCard').style.display = 'block';
+  document.getElementById('att_rosterArea').innerHTML = roster.map((p) => {
+    const rec = existingMap[p.id];
+    return `
+      <div class="person-card-row" data-person-id="${escapeHtml(p.id)}" data-record-id="${rec ? rec.id : ''}" style="padding:10px 0;border-bottom:1px solid var(--surface)">
+        <span>${escapeHtml(p.name_ar)}</span>
+        <select class="att-status-select" style="width:auto;min-width:120px">
+          ${statuses.map((st) => `<option value="${escapeHtml(st)}" ${rec && rec.status === st ? 'selected' : ''}>${escapeHtml(st)}</option>`).join('')}
+        </select>
+      </div>`;
+  }).join('');
+
+  document.getElementById('att_saveBtn').onclick = () => saveAttendanceRoster(personType);
+}
+
+async function saveAttendanceRoster(personType) {
+  const date = document.getElementById('att_date').value;
+  const branch = document.getElementById('att_branch').value;
+  const btn = document.getElementById('att_saveBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+
+  const rows = document.querySelectorAll('#att_rosterArea [data-person-id]');
+  const entries = Array.from(rows).map((row) => ({
+    personId: row.getAttribute('data-person-id'),
+    status: row.querySelector('.att-status-select').value,
+  }));
+
+  const body = { date, personType, branch, entries };
+  if (personType === 'student') {
+    body.grade = document.getElementById('att_grade').value;
+    body.section = document.getElementById('att_section').value;
+  } else {
+    body.targetRole = document.getElementById('att_targetRole').value;
+  }
+
+  try {
+    await apiCall('attendance', { method: 'POST', body: { action: 'save', ...body } });
+    showToast('تم حفظ الحضور بنجاح', 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'حفظ الحضور'; }
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
