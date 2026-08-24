@@ -286,9 +286,30 @@ async function handleDeleteEvaluation(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/* -------------------- قائمة موظفين مع حالة تقييمهم بدورة معيّنة -------------------- */
+async function handleListEvaluationsForCycle(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, EVALUATOR_ROLES_);
+  const { cycleId } = req.body;
+
+  let query = supabaseAdmin.from('employees').select('id, name_ar, role, branch').is('deleted_at', null);
+  if (user.role === 'role_teacher_sup') query = query.eq('role', 'role_teacher').eq('branch', user.branch);
+  else if (user.role === 'role_branch_monitor') query = query.in('branch', user.allBranches || [user.branch]).neq('id', user.id);
+
+  const { data: roster, error } = await query;
+  if (error) throw error;
+
+  const { data: evals } = await supabaseAdmin.from('evaluations').select('employee_id, final_score').eq('cycle_id', cycleId).in('employee_id', roster.map((r) => r.id));
+  const scoreMap = {}; (evals || []).forEach((e) => { scoreMap[e.employee_id] = Number(e.final_score); });
+
+  const result = roster.map((r) => ({ ...r, score: scoreMap[r.id] ?? null, evaluated: scoreMap[r.id] !== undefined }));
+  return res.status(200).json({ success: true, data: result });
+}
+
 export default createRouter({
   myEvaluations: handleMyEvaluations,
   listEvaluatable: handleListEvaluatable,
+  listEvaluationsForCycle: handleListEvaluationsForCycle,
   listCriteria: handleListCriteria,
   saveCriterion: handleSaveCriterion,
   deleteCriterion: handleDeleteCriterion,
