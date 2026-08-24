@@ -14,7 +14,8 @@ import { generateEmployeeId } from '../lib/idGenerator.js';
 
 /* -------------------- قائمة الموظفين -------------------- */
 async function handleList(req, res) {
-  requireAuth(req);
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']); // 🆕 كان مفقوداً — أي مستخدم مسجَّل دخول كان يقدر يجلب كل الموظفين
   const { data, error } = await supabaseAdmin
     .from('employees')
     .select('id, national_id, name_ar, name_en, user_type, role, gender, branch, stage, grades, sections, subjects, created_at, employee_branches(branch)')
