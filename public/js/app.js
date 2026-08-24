@@ -14,12 +14,13 @@ const PAGE_REGISTRY = {
   employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
   parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
+  familyAccounts: { label: 'حسابات الطلاب والأسر', icon: 'lock', render: renderFamilyAccountsView },
   users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'users'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users'],
 };
 
 function pagesForCurrentUser() {
@@ -1184,6 +1185,95 @@ function renderParentsTable() {
         await apiCall('parents', { method: 'POST', body: { action: 'delete', id: btn.getAttribute('data-id') } });
         showToast('تم الحذف بنجاح', 'success');
         loadParentsList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+}
+
+/* ===================== صفحة حسابات الطلاب والأسر ===================== */
+
+async function renderFamilyAccountsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2>حسابات الطلاب وأولياء الأمور</h2>
+      <div class="field"><label>بحث بالاسم أو اسم المستخدم</label><input id="famAccSearchInput" type="text"></div>
+      <div id="famAccListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('famAccSearchInput').addEventListener('input', renderFamilyAccountsTable);
+  loadFamilyAccountsList();
+}
+
+async function loadFamilyAccountsList() {
+  const area = document.getElementById('famAccListArea');
+  try {
+    APP.allFamilyAccounts = await apiCall('family-accounts', { method: 'POST', body: { action: 'list' } });
+    renderFamilyAccountsTable();
+  } catch (e) {
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderFamilyAccountsTable() {
+  const area = document.getElementById('famAccListArea');
+  const q = (document.getElementById('famAccSearchInput').value || '').trim().toLowerCase();
+  const list = APP.allFamilyAccounts.filter((a) => !q || (a.nameAr || '').toLowerCase().includes(q) || a.username.toLowerCase().includes(q));
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد حسابات مطابقة</p>'; return; }
+
+  area.innerHTML = `<div class="person-card-grid">${list.map((a) => {
+    const isActive = a.status === 'نشط';
+    const typeLabel = a.role === 'role_studen' ? 'طالب' : 'ولي أمر';
+    return `
+    <div class="person-card">
+      <div class="person-card-header">
+        <span class="person-avatar">${escapeHtml((a.nameAr || '؟').trim().charAt(0))}</span>
+        <div class="person-card-info">
+          <div class="person-card-name">${escapeHtml(a.nameAr || 'بلا اسم')}</div>
+          <div class="person-card-role">${typeLabel} — ${escapeHtml(a.detail || '')}</div>
+        </div>
+        <span class="status-badge ${isActive ? 'status-badge-on' : 'status-badge-off'}">
+          <span class="status-dot ${isActive ? 'status-dot-on' : 'status-dot-off'}"></span>${isActive ? 'مفعَّل' : 'معطَّل'}
+        </span>
+      </div>
+      <div class="person-card-body">
+        <div class="person-card-row"><span>اسم المستخدم</span><span>${escapeHtml(a.username)}</span></div>
+      </div>
+      <div class="person-card-footer">
+        <div class="person-card-actions">
+          <button type="button" class="btn-outline-sm ${isActive ? 'btn-danger-outline' : ''}" data-id="${escapeHtml(a.id)}" data-new-status="${isActive ? 'غير نشط' : 'نشط'}">
+            ${isActive ? 'تعطيل' : 'تفعيل'}
+          </button>
+          <button type="button" class="btn-reset-fam-pass btn-outline-sm" data-id="${escapeHtml(a.id)}" data-name="${escapeHtml(a.nameAr || '')}">${ICONS.key()} إعادة تعيين</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('')}</div>`;
+
+  area.querySelectorAll('[data-new-status]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const newStatus = btn.getAttribute('data-new-status');
+      if (!confirm(newStatus === 'نشط' ? 'تأكيد تفعيل هذا الحساب؟' : 'تأكيد تعطيل هذا الحساب؟')) return;
+      try {
+        await apiCall('family-accounts', { method: 'POST', body: { action: 'toggleStatus', id: btn.getAttribute('data-id'), newStatus } });
+        showToast(newStatus === 'نشط' ? 'تم التفعيل' : 'تم التعطيل', 'success');
+        loadFamilyAccountsList();
+      } catch (e) {
+        showToast(e.message, 'error');
+      }
+    });
+  });
+
+  area.querySelectorAll('.btn-reset-fam-pass').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const name = btn.getAttribute('data-name');
+      if (!confirm(`إعادة تعيين كلمة مرور "${name}" لرقم هويته الأصلي؟`)) return;
+      try {
+        const result = await apiCall('family-accounts', { method: 'POST', body: { action: 'resetPassword', id: btn.getAttribute('data-id') } });
+        showToast('تمت إعادة التعيين — كلمة المرور الجديدة: ' + result.tempPassword, 'success');
       } catch (e) {
         showToast(e.message, 'error');
       }
