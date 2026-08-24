@@ -16,7 +16,7 @@ async function handleList(req, res) {
   const { data, error } = await supabaseAdmin
     .from('audit_log')
     .select('*')
-    .order('timestamp', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(300);
 
   if (error) throw error;
