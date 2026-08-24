@@ -32,6 +32,10 @@ async function handleLogin(req, res) {
 
   if (error) throw error;
   if (!userRow) {
+    await supabaseAdmin.from('audit_log').insert({
+      emp_id: null, emp_name: username, role: null,
+      action: 'محاولة دخول فاشلة (اسم مستخدم غير موجود)', details: { ip: clientIp }, branch: null,
+    });
     const err = new Error('اسم المستخدم أو كلمة المرور غير صحيحة');
     err.statusCode = 401;
     throw err;
@@ -39,6 +43,10 @@ async function handleLogin(req, res) {
 
   const passwordMatches = await bcrypt.compare(password, userRow.password_hash);
   if (!passwordMatches) {
+    await supabaseAdmin.from('audit_log').insert({
+      emp_id: userRow.id, emp_name: username, role: null,
+      action: 'محاولة دخول فاشلة (كلمة مرور خاطئة)', details: { ip: clientIp }, branch: null,
+    });
     const err = new Error('اسم المستخدم أو كلمة المرور غير صحيحة');
     err.statusCode = 401;
     throw err;
@@ -61,6 +69,13 @@ async function handleLogin(req, res) {
   };
 
   const token = issueSessionToken(userPayload);
+
+  // 🆕 تسجيل الدخول الناجح بسجل التتبّع — كان مفقوداً، فقط العمليات اللاحقة كانت تُسجَّل
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: employee.id, emp_name: employee.name_ar, role: employee.role,
+    action: 'تسجيل دخول ناجح', details: { ip: clientIp, firstLogin: isFirstLogin }, branch: employee.branch,
+  });
+
   return res.status(200).json({ success: true, data: { token, user: userPayload, firstLogin: isFirstLogin } });
 }
 
