@@ -17,11 +17,14 @@ const PAGE_REGISTRY = {
   familyAccounts: { label: 'حسابات الطلاب والأسر', icon: 'lock', render: renderFamilyAccountsView },
   users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
   siteSettings: { label: 'إعدادات الموقع', icon: 'settingsGear', render: renderSiteSettingsView },
+  subjectMatrix: { label: 'توزيع المواد', icon: 'tasks', render: renderSubjectMatrixView },
+  gradeDistribution: { label: 'توزيع الدرجات', icon: 'tasks', render: renderGradeDistributionView },
+  auditLog: { label: 'سجل التتبّع', icon: 'lock', render: renderAuditLogView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'siteSettings'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'siteSettings', 'subjectMatrix', 'gradeDistribution', 'auditLog'],
 };
 
 function pagesForCurrentUser() {
@@ -1498,6 +1501,183 @@ async function saveSettingsListHandler(camelKey, snakeKey) {
   } catch (e) {
     showToast(e.message, 'error');
   }
+}
+
+/* ===================== صفحة توزيع المواد ===================== */
+
+async function renderSubjectMatrixView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  const settings = await getSettingsOnce();
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>إضافة توزيع مادة</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">حدّد أي مادة تُدرَّس بأي فرع/صف/شعبة</p>
+      <div class="field"><label>الفرع</label><select id="sm_branch">${settings.branches.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>الصف</label><select id="sm_grade">${settings.grades.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="sm_section">${settings.sections.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>المادة</label><select id="sm_subject">${settings.subjects.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <button type="button" id="addMatrixBtn">إضافة</button>
+    </div>
+    <div class="card">
+      <h3>التوزيعات الحالية</h3>
+      <div id="matrixListArea"><div class="skel-rows"><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('addMatrixBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('addMatrixBtn');
+    btn.disabled = true;
+    try {
+      await apiCall('academic-config', {
+        method: 'POST',
+        body: {
+          action: 'addMatrixEntry',
+          branch: document.getElementById('sm_branch').value,
+          grade: document.getElementById('sm_grade').value,
+          section: document.getElementById('sm_section').value,
+          subject: document.getElementById('sm_subject').value,
+        },
+      });
+      showToast('تمت الإضافة بنجاح', 'success');
+      loadMatrixList();
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { btn.disabled = false; }
+  });
+
+  loadMatrixList();
+}
+
+async function loadMatrixList() {
+  const area = document.getElementById('matrixListArea');
+  try {
+    const list = await apiCall('academic-config', { method: 'POST', body: { action: 'listMatrix' } });
+    if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد توزيعات بعد</p>'; return; }
+    area.innerHTML = list.map((r) => `
+      <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface)">
+        <span>${escapeHtml(r.branch)} — ${escapeHtml(r.grade)} — ${escapeHtml(r.section)}</span>
+        <span style="display:flex;align-items:center;gap:8px">${escapeHtml(r.subject)}
+          <span data-del-matrix="${r.id}" style="cursor:pointer;color:#c62828">${ICONS.trash()}</span>
+        </span>
+      </div>`).join('');
+    area.querySelectorAll('[data-del-matrix]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        if (!confirm('تأكيد الحذف؟')) return;
+        try {
+          await apiCall('academic-config', { method: 'POST', body: { action: 'deleteMatrixEntry', id: el.getAttribute('data-del-matrix') } });
+          loadMatrixList();
+        } catch (e) { showToast(e.message, 'error'); }
+      });
+    });
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; }
+}
+
+/* ===================== صفحة توزيع الدرجات ===================== */
+
+async function renderGradeDistributionView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  const settings = await getSettingsOnce();
+  const evalTypes = [...(settings.continuousEvalTypes || []), ...(settings.exams || [])];
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>إضافة توزيع درجات</h2>
+      <p style="color:#888;font-size:12.5px;margin-top:-10px">حدّد نوع التقييم ودرجته من 100 لكل مادة</p>
+      <div class="field"><label>المادة</label><select id="gd_subject">${settings.subjects.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>نوع التقييم</label><select id="gd_evalType">${evalTypes.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      <div class="field"><label>الدرجة من 100</label><input type="number" id="gd_maxScore" min="0" max="100" step="0.5" value="10"></div>
+      <button type="button" id="addGradeDistBtn">إضافة</button>
+    </div>
+    <div class="card">
+      <h3>التوزيعات الحالية</h3>
+      <div id="gradeDistListArea"><div class="skel-rows"><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('addGradeDistBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('addGradeDistBtn');
+    btn.disabled = true;
+    try {
+      await apiCall('academic-config', {
+        method: 'POST',
+        body: {
+          action: 'addGradeDist',
+          subject: document.getElementById('gd_subject').value,
+          evalType: document.getElementById('gd_evalType').value,
+          maxScore: Number(document.getElementById('gd_maxScore').value),
+        },
+      });
+      showToast('تمت الإضافة بنجاح', 'success');
+      loadGradeDistList();
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { btn.disabled = false; }
+  });
+
+  loadGradeDistList();
+}
+
+async function loadGradeDistList() {
+  const area = document.getElementById('gradeDistListArea');
+  try {
+    const list = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
+    if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد توزيعات بعد</p>'; return; }
+    area.innerHTML = list.map((r) => `
+      <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface)">
+        <span>${escapeHtml(r.subject)} — ${escapeHtml(r.eval_type)}</span>
+        <span style="display:flex;align-items:center;gap:8px">${r.max_score} / 100
+          <span data-del-grade="${r.id}" style="cursor:pointer;color:#c62828">${ICONS.trash()}</span>
+        </span>
+      </div>`).join('');
+    area.querySelectorAll('[data-del-grade]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        if (!confirm('تأكيد الحذف؟')) return;
+        try {
+          await apiCall('academic-config', { method: 'POST', body: { action: 'deleteGradeDist', id: el.getAttribute('data-del-grade') } });
+          loadGradeDistList();
+        } catch (e) { showToast(e.message, 'error'); }
+      });
+    });
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; }
+}
+
+/* ===================== صفحة سجل التتبّع ===================== */
+
+async function renderAuditLogView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2>سجل التتبّع (آخر 300 عملية)</h2>
+      <div class="field"><label>بحث بالاسم أو نوع العملية</label><input id="auditSearchInput" type="text"></div>
+      <div id="auditLogListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+    </div>`;
+
+  document.getElementById('auditSearchInput').addEventListener('input', renderAuditLogTable);
+  loadAuditLogList();
+}
+
+async function loadAuditLogList() {
+  const area = document.getElementById('auditLogListArea');
+  try {
+    APP.allAuditLog = await apiCall('audit-log', { method: 'POST', body: { action: 'list' } });
+    renderAuditLogTable();
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; }
+}
+
+function renderAuditLogTable() {
+  const area = document.getElementById('auditLogListArea');
+  const q = (document.getElementById('auditSearchInput').value || '').trim().toLowerCase();
+  const list = APP.allAuditLog.filter((r) => !q || (r.emp_name || '').toLowerCase().includes(q) || (r.action || '').toLowerCase().includes(q));
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد عمليات مطابقة</p>'; return; }
+
+  area.innerHTML = list.map((r) => `
+    <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface);align-items:flex-start">
+      <div>
+        <div style="font-weight:700;font-size:13px">${escapeHtml(r.action)}</div>
+        <div style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(r.emp_name)} — ${escapeHtml(r.role)} — ${escapeHtml(r.branch)}</div>
+      </div>
+      <span style="font-size:11px;color:var(--text-muted);white-space:nowrap">${new Date(r.timestamp).toLocaleString('ar')}</span>
+    </div>`).join('');
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
