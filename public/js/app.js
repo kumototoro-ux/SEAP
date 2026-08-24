@@ -81,18 +81,19 @@ const PAGE_REGISTRY = {
   studentAttendance: { label: 'تحضير الطلاب', icon: 'students', render: renderStudentAttendanceView },
   staffAttendance: { label: 'تحضير الموظفين', icon: 'employees', render: renderStaffAttendanceView },
   studentBehavior: { label: 'سلوك الطلاب', icon: 'guardians', render: renderStudentBehaviorView },
+  performance: { label: 'تقييم الأداء', icon: 'tasks', render: renderPerformanceView },
 };
 
 /** 🆕 صلاحيات كل دور — مطابقة تماماً لمنطق ROLE_PAGES بمشروع GAS الأصلي،
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance', 'studentBehavior'],
-  role_teacher: ['home', 'studentAttendance'],
-  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'],
-  role_teacher_sup: ['home', 'staffAttendance'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance'],
+  role_teacher: ['home', 'studentAttendance', 'performance'],
+  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior', 'performance'],
+  role_teacher_sup: ['home', 'staffAttendance', 'performance'],
   Admission: ['home', 'students', 'parents', 'familyAccounts'],
-  role_branch_monitor: ['home', 'staffAttendance'],
+  role_branch_monitor: ['home', 'staffAttendance', 'performance'],
 };
 
 function pagesForCurrentUser() {
@@ -2113,6 +2114,318 @@ function renderBehaviorHistory(records) {
       try {
         await apiCall('behavior', { method: 'POST', body: { action: 'delete', id: el.getAttribute('data-del-behavior') } });
         loadBehaviorForStudent();
+      } catch (e) { showToast(e.message, 'error'); }
+    });
+  });
+}
+
+/* ===================== صفحة تقييم الأداء ===================== */
+
+const EVALUATOR_ROLES = ['role_admin', 'role_teacher_sup', 'role_branch_monitor'];
+let perfActiveTab = 'my';
+let perfSelectedEmployeeId = null;
+let perfSelectedCycleId = null;
+
+async function renderPerformanceView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  const isEvaluator = EVALUATOR_ROLES.includes(APP.user.role);
+  const isAdmin = APP.user.role === 'role_admin';
+  perfActiveTab = 'my';
+
+  const tabs = [
+    { key: 'my', label: 'أدائي' },
+    ...(isEvaluator ? [{ key: 'evaluate', label: 'تقييم موظف' }] : []),
+    ...(isAdmin ? [{ key: 'dashboard', label: 'لوحة الإحصاءات' }, { key: 'criteria', label: 'معايير التقييم' }, { key: 'cycles', label: 'دورات التقييم' }] : []),
+  ];
+
+  main.innerHTML = `
+    <div class="card">
+      <div class="segmented-control" id="perfTabBar" style="flex-wrap:wrap">
+        ${tabs.map((t) => `<button type="button" class="segmented-item ${t.key === perfActiveTab ? 'active' : ''}" data-perf-tab="${t.key}">${escapeHtml(t.label)}</button>`).join('')}
+      </div>
+    </div>
+    <div id="perfContent"></div>`;
+
+  document.querySelectorAll('[data-perf-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => { perfActiveTab = btn.getAttribute('data-perf-tab'); renderPerfTabContent(); });
+  });
+
+  renderPerfTabContent();
+}
+
+async function renderPerfTabContent() {
+  document.querySelectorAll('[data-perf-tab]').forEach((b) => b.classList.toggle('active', b.getAttribute('data-perf-tab') === perfActiveTab));
+  const content = document.getElementById('perfContent');
+  content.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  if (perfActiveTab === 'my') return renderPerfMySection(content);
+  if (perfActiveTab === 'evaluate') return renderPerfEvaluateSection(content);
+  if (perfActiveTab === 'dashboard') return renderPerfDashboardSection(content);
+  if (perfActiveTab === 'criteria') return renderPerfCriteriaSection(content);
+  if (perfActiveTab === 'cycles') return renderPerfCyclesSection(content);
+}
+
+/* -------------------- أدائي -------------------- */
+async function renderPerfMySection(content) {
+  const evals = await apiCall('performance', { method: 'POST', body: { action: 'myEvaluations' } });
+  if (!evals.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا توجد تقييمات مسجَّلة لك بعد</p></div>'; return; }
+
+  content.innerHTML = `
+    <div class="card">
+      <h2>سجل أدائي</h2>
+      ${evals.map((e) => {
+        const color = e.final_score >= 85 ? '#2F7A4D' : e.final_score >= 65 ? '#B8860B' : '#C4483A';
+        return `
+        <div style="border:1px solid var(--outline);border-radius:var(--radius-sm);padding:14px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div>
+              <div style="font-weight:800">${escapeHtml(e.evaluation_cycles?.name || '—')}</div>
+              <div style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(e.evaluation_cycles?.start_date || '')} — ${escapeHtml(e.evaluation_cycles?.end_date || '')}</div>
+            </div>
+            <div style="font-size:26px;font-weight:800;color:${color}">${e.final_score}<span style="font-size:13px">/100</span></div>
+          </div>
+          ${e.strengths ? `<div style="margin-top:10px;font-size:13px"><b>نقاط القوة:</b> ${escapeHtml(e.strengths)}</div>` : ''}
+          ${e.improvements ? `<div style="margin-top:4px;font-size:13px"><b>نقاط التحسين:</b> ${escapeHtml(e.improvements)}</div>` : ''}
+          ${e.manager_notes ? `<div style="margin-top:4px;font-size:13px"><b>ملاحظات المدير:</b> ${escapeHtml(e.manager_notes)}</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+/* -------------------- تقييم موظف -------------------- */
+async function renderPerfEvaluateSection(content) {
+  const [employees, cycles] = await Promise.all([
+    apiCall('performance', { method: 'POST', body: { action: 'listEvaluatable' } }),
+    apiCall('performance', { method: 'POST', body: { action: 'listCycles' } }),
+  ]);
+  const activeCycles = cycles.filter((c) => c.status === 'active');
+
+  if (!activeCycles.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا توجد دورة تقييم نشطة حالياً — يجب على الأدمن إنشاء واحدة أولاً.</p></div>'; return; }
+  if (!employees.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا يوجد موظفون ضمن نطاقك للتقييم</p></div>'; return; }
+
+  content.innerHTML = `
+    <div class="card">
+      <h2>تقييم موظف</h2>
+      <div class="field"><label>الموظف</label>
+        <select id="perf_employee"><option value="" disabled selected>-- اختر --</option>${employees.map((e) => `<option value="${escapeHtml(e.id)}" data-branch="${escapeHtml(e.branch)}">${escapeHtml(e.name_ar)}</option>`).join('')}</select>
+      </div>
+      <div class="field"><label>دورة التقييم</label>
+        <select id="perf_cycle">${activeCycles.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select>
+      </div>
+      <button type="button" id="perf_loadFormBtn">تحميل نموذج التقييم</button>
+    </div>
+    <div id="perfEvalFormBox"></div>`;
+
+  document.getElementById('perf_loadFormBtn').addEventListener('click', async () => {
+    const empSelect = document.getElementById('perf_employee');
+    if (!empSelect.value) { showToast('اختر موظفاً أولاً', 'error'); return; }
+    perfSelectedEmployeeId = empSelect.value;
+    perfSelectedCycleId = document.getElementById('perf_cycle').value;
+    const branch = empSelect.selectedOptions[0].getAttribute('data-branch');
+    await loadEvaluationForm(branch);
+  });
+}
+
+async function loadEvaluationForm(branch) {
+  const box = document.getElementById('perfEvalFormBox');
+  box.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  const [criteria, existing] = await Promise.all([
+    apiCall('performance', { method: 'POST', body: { action: 'listCriteria' } }),
+    apiCall('performance', { method: 'POST', body: { action: 'getEvaluation', employeeId: perfSelectedEmployeeId, cycleId: perfSelectedCycleId } }),
+  ]);
+  const existingScoresMap = {};
+  (existing.scores || []).forEach((s) => { existingScoresMap[s.criterion_id] = s.score; });
+
+  box.innerHTML = `
+    <div class="card">
+      <h3>نموذج التقييم</h3>
+      ${criteria.map((c) => `
+        <div class="field">
+          <label>${escapeHtml(c.name)} <span style="color:#888;font-weight:400">(وزن ${c.weight}%)</span></label>
+          <input type="number" class="perf-score-input" data-criterion-id="${c.id}" data-weight="${c.weight}" min="0" max="100" value="${existingScoresMap[c.id] ?? 70}">
+        </div>`).join('')}
+      <div class="field"><label>نقاط القوة</label><textarea id="perf_strengths" rows="2">${escapeHtml(existing.evaluation?.strengths || '')}</textarea></div>
+      <div class="field"><label>نقاط تحتاج تحسيناً</label><textarea id="perf_improvements" rows="2">${escapeHtml(existing.evaluation?.improvements || '')}</textarea></div>
+      <div class="field"><label>ملاحظات المدير</label><textarea id="perf_notes" rows="2">${escapeHtml(existing.evaluation?.manager_notes || '')}</textarea></div>
+      <div class="modal-detail-row" id="perf_liveTotal" style="border-top:2px solid var(--outline);padding-top:12px"></div>
+      <button type="button" id="perf_saveBtn" style="margin-top:14px;width:100%">${existing.evaluation ? 'تحديث التقييم' : 'حفظ التقييم'}</button>
+    </div>`;
+
+  function recalcLiveTotal() {
+    let weightedSum = 0, totalWeight = 0;
+    document.querySelectorAll('.perf-score-input').forEach((inp) => {
+      const w = Number(inp.getAttribute('data-weight'));
+      weightedSum += Number(inp.value) * w; totalWeight += w;
+    });
+    const final = totalWeight ? Math.round((weightedSum / totalWeight) * 100) / 100 : 0;
+    document.getElementById('perf_liveTotal').innerHTML = `<span class="modal-detail-label">النتيجة النهائية المتوقَّعة</span><span class="modal-detail-value" style="font-size:16px">${final} / 100</span>`;
+  }
+  document.querySelectorAll('.perf-score-input').forEach((inp) => inp.addEventListener('input', recalcLiveTotal));
+  recalcLiveTotal();
+
+  document.getElementById('perf_saveBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('perf_saveBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    const scores = Array.from(document.querySelectorAll('.perf-score-input')).map((inp) => ({ criterionId: Number(inp.getAttribute('data-criterion-id')), score: Number(inp.value) }));
+    try {
+      const result = await apiCall('performance', {
+        method: 'POST',
+        body: {
+          action: 'saveEvaluation', employeeId: perfSelectedEmployeeId, cycleId: perfSelectedCycleId, branch, scores,
+          strengths: document.getElementById('perf_strengths').value.trim(),
+          improvements: document.getElementById('perf_improvements').value.trim(),
+          managerNotes: document.getElementById('perf_notes').value.trim(),
+        },
+      });
+      showToast(`تم الحفظ — النتيجة النهائية: ${result.finalScore}/100`, 'success');
+    } catch (e) { showToast(e.message, 'error'); }
+    finally { btn.disabled = false; btn.textContent = 'حفظ التقييم'; }
+  });
+}
+
+/* -------------------- لوحة الإحصاءات (أدمن) -------------------- */
+async function renderPerfDashboardSection(content) {
+  const cycles = await apiCall('performance', { method: 'POST', body: { action: 'listCycles' } });
+  if (!cycles.length) { content.innerHTML = '<div class="card"><p style="color:#888">لا توجد دورات تقييم بعد</p></div>'; return; }
+
+  content.innerHTML = `
+    <div class="card">
+      <div class="field"><label>اختر الدورة</label><select id="perf_dashCycle">${cycles.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}</select></div>
+    </div>
+    <div id="perfDashArea"></div>`;
+
+  document.getElementById('perf_dashCycle').addEventListener('change', loadPerfDashboard);
+  loadPerfDashboard();
+}
+
+async function loadPerfDashboard() {
+  const cycleId = document.getElementById('perf_dashCycle').value;
+  const area = document.getElementById('perfDashArea');
+  area.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  const stats = await apiCall('performance', { method: 'POST', body: { action: 'dashboardStats', cycleId } });
+
+  area.innerHTML = `
+    <div class="card">
+      <h3>نظرة عامة</h3>
+      <div class="modal-detail-row"><span class="modal-detail-label">متوسط الأداء العام</span><span class="modal-detail-value" style="font-size:18px">${stats.average} / 100</span></div>
+      <div class="modal-detail-row"><span class="modal-detail-label">عدد التقييمات المسجَّلة</span><span class="modal-detail-value">${stats.count}</span></div>
+    </div>
+    <div class="card">
+      <h3>أفضل 5 موظفين</h3>
+      ${stats.topPerformers.map((p) => `<div class="modal-detail-row"><span class="modal-detail-label">${escapeHtml(p.name || '—')}</span><span class="modal-detail-value" style="color:#2F7A4D">${p.score}</span></div>`).join('') || '<p style="color:#888">لا بيانات</p>'}
+    </div>
+    <div class="card">
+      <h3>يحتاجون تحسيناً</h3>
+      ${stats.needsImprovement.map((p) => `<div class="modal-detail-row"><span class="modal-detail-label">${escapeHtml(p.name || '—')}</span><span class="modal-detail-value" style="color:#C4483A">${p.score}</span></div>`).join('') || '<p style="color:#888">لا بيانات</p>'}
+    </div>
+    <div class="card">
+      <h3>مقارنة بين الفروع</h3>
+      ${Object.entries(stats.byBranch).map(([b, avg]) => `<div class="modal-detail-row"><span class="modal-detail-label">${escapeHtml(b)}</span><span class="modal-detail-value">${avg}</span></div>`).join('') || '<p style="color:#888">لا بيانات</p>'}
+    </div>`;
+}
+
+/* -------------------- معايير التقييم (أدمن) -------------------- */
+async function renderPerfCriteriaSection(content) {
+  const settings = await getSettingsOnce();
+  const criteria = await apiCall('performance', { method: 'POST', body: { action: 'listCriteria' } });
+  const roleOptions = [
+    { v: 'role_teacher', l: 'معلم' }, { v: 'role_teacher_sup', l: 'مشرف معلمين' },
+    { v: 'role_student_sup', l: 'مشرف طلاب' }, { v: 'role_branch_monitor', l: 'مراقب فروع' },
+  ];
+
+  content.innerHTML = `
+    <div class="card">
+      <h2>إضافة معيار تقييم</h2>
+      <div class="field"><label>اسم المعيار</label><input type="text" id="crit_name" placeholder="مثال: جودة العمل"></div>
+      <div class="field"><label>الوزن (%)</label><input type="number" id="crit_weight" min="1" max="100" value="10"></div>
+      <div class="filter-card-title">ينطبق على الأدوار</div>
+      <div class="checkbox-list" id="crit_rolesBox">${roleOptions.map((o) => `<label class="checkbox-item"><input type="checkbox" class="crit-role-cb" value="${o.v}"> ${o.l}</label>`).join('')}</div>
+      <button type="button" id="crit_addBtn" style="margin-top:14px">إضافة</button>
+    </div>
+    <div class="card">
+      <h3>المعايير الحالية</h3>
+      ${criteria.map((c) => `
+        <div class="modal-detail-row">
+          <span class="modal-detail-label">${escapeHtml(c.name)} (${c.weight}%)</span>
+          <span class="modal-detail-value" style="display:flex;align-items:center;gap:8px">
+            ${(c.applicable_roles || []).join('، ')}
+            <span data-del-criterion="${c.id}" style="cursor:pointer;color:#c62828">${ICONS.trash()}</span>
+          </span>
+        </div>`).join('') || '<p style="color:#888">لا توجد معايير بعد</p>'}
+    </div>`;
+
+  document.getElementById('crit_addBtn').addEventListener('click', async () => {
+    const name = document.getElementById('crit_name').value.trim();
+    const weight = Number(document.getElementById('crit_weight').value);
+    const applicableRoles = collectCheckedValues('.crit-role-cb');
+    if (!name || !applicableRoles.length) { showToast('أكمل الاسم واختر دوراً واحداً على الأقل', 'error'); return; }
+    try {
+      await apiCall('performance', { method: 'POST', body: { action: 'saveCriterion', name, weight, applicableRoles } });
+      showToast('تمت الإضافة بنجاح', 'success');
+      renderPerfCriteriaSection(content);
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  content.querySelectorAll('[data-del-criterion]').forEach((el) => {
+    el.addEventListener('click', async () => {
+      if (!confirm('تأكيد إزالة هذا المعيار؟')) return;
+      try {
+        await apiCall('performance', { method: 'POST', body: { action: 'deleteCriterion', id: el.getAttribute('data-del-criterion') } });
+        renderPerfCriteriaSection(content);
+      } catch (e) { showToast(e.message, 'error'); }
+    });
+  });
+}
+
+/* -------------------- دورات التقييم (أدمن) -------------------- */
+async function renderPerfCyclesSection(content) {
+  const cycles = await apiCall('performance', { method: 'POST', body: { action: 'listCycles' } });
+
+  content.innerHTML = `
+    <div class="card">
+      <h2>إنشاء دورة تقييم جديدة</h2>
+      <div class="field"><label>اسم الدورة</label><input type="text" id="cyc_name" placeholder="مثال: تقييم الربع الأول 2026"></div>
+      <div class="field"><label>النوع</label>
+        <select id="cyc_type"><option value="monthly">شهرية</option><option value="quarterly">ربع سنوية</option><option value="yearly">سنوية</option></select>
+      </div>
+      <div class="field"><label>تاريخ البداية</label><input type="date" id="cyc_start"></div>
+      <div class="field"><label>تاريخ النهاية</label><input type="date" id="cyc_end"></div>
+      <button type="button" id="cyc_addBtn">إنشاء الدورة</button>
+    </div>
+    <div class="card">
+      <h3>الدورات الحالية</h3>
+      ${cycles.map((c) => `
+        <div class="modal-detail-row">
+          <span class="modal-detail-label">${escapeHtml(c.name)} <span style="color:#888">(${c.start_date} → ${c.end_date})</span></span>
+          <span class="modal-detail-value" style="display:flex;align-items:center;gap:8px">
+            <span class="status-badge ${c.status === 'active' ? 'status-badge-on' : 'status-badge-off'}">${c.status === 'active' ? 'نشطة' : 'مغلقة'}</span>
+            ${c.status === 'active' ? `<button type="button" class="btn-outline-sm" data-close-cycle="${c.id}" style="width:auto">إغلاق</button>` : ''}
+          </span>
+        </div>`).join('') || '<p style="color:#888">لا توجد دورات بعد</p>'}
+    </div>`;
+
+  document.getElementById('cyc_addBtn').addEventListener('click', async () => {
+    const name = document.getElementById('cyc_name').value.trim();
+    const startDate = document.getElementById('cyc_start').value;
+    const endDate = document.getElementById('cyc_end').value;
+    if (!name || !startDate || !endDate) { showToast('أكمل كل الحقول', 'error'); return; }
+    try {
+      await apiCall('performance', { method: 'POST', body: { action: 'addCycle', name, periodType: document.getElementById('cyc_type').value, startDate, endDate } });
+      showToast('تم إنشاء الدورة بنجاح', 'success');
+      renderPerfCyclesSection(content);
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  content.querySelectorAll('[data-close-cycle]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('تأكيد إغلاق هذي الدورة؟ لن يُسمح بتقييمات جديدة فيها.')) return;
+      try {
+        await apiCall('performance', { method: 'POST', body: { action: 'closeCycle', id: btn.getAttribute('data-close-cycle') } });
+        renderPerfCyclesSection(content);
       } catch (e) { showToast(e.message, 'error'); }
     });
   });
