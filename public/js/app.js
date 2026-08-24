@@ -1714,7 +1714,7 @@ async function renderSettingsGradeDistSection(content) {
 
   document.getElementById('gd_subject').addEventListener('change', (e) => {
     const subject = e.target.value;
-    gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_score) }));
+    gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_grade) }));
     document.getElementById('gd_cardTitle').textContent = 'توزيع درجات: ' + subject;
     document.getElementById('gradeDistCardBox').style.display = 'block';
     renderGradeDistEntries();
