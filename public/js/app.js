@@ -16,11 +16,12 @@ const PAGE_REGISTRY = {
   parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
   familyAccounts: { label: 'حسابات الطلاب والأسر', icon: 'lock', render: renderFamilyAccountsView },
   users: { label: 'المستخدمون', icon: 'users', render: renderUsersView },
+  siteSettings: { label: 'إعدادات الموقع', icon: 'settingsGear', render: renderSiteSettingsView },
 };
 
 /** 🆕 صلاحيات كل دور — بنفس فلسفة ROLE_PAGES بمشروع GAS بالضبط */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users'],
+  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'siteSettings'],
 };
 
 function pagesForCurrentUser() {
@@ -824,6 +825,12 @@ function renderStudentsTable() {
 async function renderUsersView() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
+    <div class="card" id="missingUsersCard" style="display:none">
+      <h3>موظفون بلا حساب دخول</h3>
+      <p style="color:#888;font-size:12.5px">حسابات لم تُنشأ تلقائياً لأي سبب — يمكنك إنشاؤها من هنا</p>
+      <button type="button" id="createAllMissingUsersBtn" class="btn-outline-sm" style="margin-bottom:10px">${ICONS.plus()} إنشاء الكل دفعة واحدة</button>
+      <div id="missingUsersList" class="checkbox-list"></div>
+    </div>
     <div class="card">
       <h2>حسابات الموظفين</h2>
       <div class="field"><label>بحث بالاسم أو اسم المستخدم</label><input id="userSearchInput" type="text"></div>
@@ -832,6 +839,58 @@ async function renderUsersView() {
 
   document.getElementById('userSearchInput').addEventListener('input', renderUsersTable);
   loadUsersList();
+  loadMissingUserAccounts();
+}
+
+async function loadMissingUserAccounts() {
+  try {
+    if (!APP.allEmployees || !APP.allEmployees.length) {
+      APP.allEmployees = await apiCall('employees', { method: 'POST', body: { action: 'list' } });
+    }
+    const users = await apiCall('users', { method: 'POST', body: { action: 'list' } });
+    const existingIds = new Set(users.map((u) => u.id));
+    const missing = APP.allEmployees.filter((e) => !existingIds.has(e.id));
+
+    const card = document.getElementById('missingUsersCard');
+    if (!missing.length) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+
+    document.getElementById('missingUsersList').innerHTML = missing.map((e) => `
+      <span class="checkbox-item">${escapeHtml(e.name_ar)}
+        <span data-create-missing="${escapeHtml(e.id)}" style="cursor:pointer;color:#2F7A4D;margin-right:4px">${ICONS.plus()}</span>
+      </span>`).join('');
+
+    document.querySelectorAll('[data-create-missing]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        try {
+          const result = await apiCall('users', { method: 'POST', body: { action: 'createMissing', id: el.getAttribute('data-create-missing') } });
+          showToast('تم إنشاء الحساب — كلمة المرور: ' + result.tempPassword, 'success');
+          loadUsersList(); loadMissingUserAccounts();
+        } catch (e) { showToast(e.message, 'error'); }
+      });
+    });
+
+    document.getElementById('createAllMissingUsersBtn').onclick = () => runBulkCreation('users', loadMissingUserAccounts, loadUsersList);
+  } catch (e) { /* تجاهل بصمت لو فشل التحقق — لا يجب يعطّل الصفحة الأساسية */ }
+}
+
+/** 🆕 تشغيل الإنشاء الجماعي بالدفعات (50 كل مرة) مع شريط تقدّم — يُستخدَم بصفحتَي المستخدمين وحسابات الأسر معاً */
+async function runBulkCreation(endpoint, onDone, onListRefresh, extraBody) {
+  showToast('جارِ الإنشاء... لا تُغلق الصفحة', 'success');
+  let totalCreated = 0;
+  let remaining = 1;
+  try {
+    while (remaining > 0) {
+      const result = await apiCall(endpoint, { method: 'POST', body: { action: 'createAllMissing', ...(extraBody || {}) } });
+      totalCreated += result.createdThisBatch;
+      remaining = result.remaining;
+    }
+    showToast(`تم إنشاء ${totalCreated} حساب بنجاح`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    onListRefresh(); onDone();
+  }
 }
 
 async function loadUsersList() {
@@ -1197,6 +1256,12 @@ function renderParentsTable() {
 async function renderFamilyAccountsView() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
+    <div class="card" id="missingFamAccCard" style="display:none">
+      <h3>طلاب/أولياء أمور بلا حساب دخول</h3>
+      <p style="color:#888;font-size:12.5px">حسابات لم تُنشأ تلقائياً لأي سبب — يمكنك إنشاؤها من هنا</p>
+      <button type="button" id="createAllMissingFamAccBtn" class="btn-outline-sm" style="margin-bottom:10px">${ICONS.plus()} إنشاء الكل دفعة واحدة</button>
+      <div id="missingFamAccList" class="checkbox-list"></div>
+    </div>
     <div class="card">
       <h2>حسابات الطلاب وأولياء الأمور</h2>
       <div class="field"><label>بحث بالاسم أو اسم المستخدم</label><input id="famAccSearchInput" type="text"></div>
@@ -1205,6 +1270,46 @@ async function renderFamilyAccountsView() {
 
   document.getElementById('famAccSearchInput').addEventListener('input', renderFamilyAccountsTable);
   loadFamilyAccountsList();
+  loadMissingFamilyAccounts();
+}
+
+async function loadMissingFamilyAccounts() {
+  try {
+    if (!APP.allStudents || !APP.allStudents.length) {
+      APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+    }
+    if (!APP.allParents || !APP.allParents.length) {
+      APP.allParents = await apiCall('parents', { method: 'POST', body: { action: 'list' } });
+    }
+    const accounts = await apiCall('family-accounts', { method: 'POST', body: { action: 'list' } });
+    const existingIds = new Set(accounts.map((a) => a.id));
+
+    const missing = [
+      ...APP.allStudents.filter((s) => !existingIds.has(s.id)).map((s) => ({ id: s.id, name_ar: s.name_ar, type: 'student' })),
+      ...APP.allParents.filter((p) => !existingIds.has(p.id)).map((p) => ({ id: p.id, name_ar: p.name_ar, type: 'parent' })),
+    ];
+
+    const card = document.getElementById('missingFamAccCard');
+    if (!missing.length) { card.style.display = 'none'; return; }
+    card.style.display = 'block';
+
+    document.getElementById('missingFamAccList').innerHTML = missing.map((r) => `
+      <span class="checkbox-item">${escapeHtml(r.name_ar)} <span style="color:#aaa">(${r.type === 'student' ? 'طالب' : 'ولي أمر'})</span>
+        <span data-create-missing="${escapeHtml(r.id)}" data-type="${r.type}" style="cursor:pointer;color:#2F7A4D;margin-right:4px">${ICONS.plus()}</span>
+      </span>`).join('');
+
+    document.querySelectorAll('[data-create-missing]').forEach((el) => {
+      el.addEventListener('click', async () => {
+        try {
+          const result = await apiCall('family-accounts', { method: 'POST', body: { action: 'createMissing', id: el.getAttribute('data-create-missing'), type: el.getAttribute('data-type') } });
+          showToast('تم إنشاء الحساب — كلمة المرور: ' + result.tempPassword, 'success');
+          loadFamilyAccountsList(); loadMissingFamilyAccounts();
+        } catch (e) { showToast(e.message, 'error'); }
+      });
+    });
+
+    document.getElementById('createAllMissingFamAccBtn').onclick = () => runBulkCreation('family-accounts', loadMissingFamilyAccounts, loadFamilyAccountsList);
+  } catch (e) { /* تجاهل بصمت */ }
 }
 
 async function loadFamilyAccountsList() {
@@ -1279,6 +1384,120 @@ function renderFamilyAccountsTable() {
       }
     });
   });
+}
+
+/* ===================== صفحة إعدادات الموقع ===================== */
+
+// 🆕 تحويل من camelCase (المُرجَع من get-settings) إلى snake_case (المطلوب بـupdateList)
+const SETTINGS_LIST_KEYS = [
+  { camel: 'branches', snake: 'branches', label: 'الفروع' },
+  { camel: 'stages', snake: 'stages', label: 'المراحل الدراسية' },
+  { camel: 'grades', snake: 'grades', label: 'الصفوف' },
+  { camel: 'sections', snake: 'sections', label: 'الشعب' },
+  { camel: 'subjects', snake: 'subjects', label: 'المواد الدراسية' },
+  { camel: 'userTypes', snake: 'user_types', label: 'أنواع المستخدمين' },
+  { camel: 'roles', snake: 'roles', label: 'الأدوار' },
+  { camel: 'accountStatuses', snake: 'account_statuses', label: 'حالات الحساب' },
+  { camel: 'attendanceStatuses', snake: 'attendance_statuses', label: 'حالات الحضور' },
+  { camel: 'terms', snake: 'terms', label: 'الفصول الدراسية' },
+  { camel: 'behaviorStatuses', snake: 'behavior_statuses', label: 'حالات السلوك' },
+  { camel: 'continuousEvalTypes', snake: 'continuous_eval_types', label: 'أنواع التقييم المستمر' },
+  { camel: 'exams', snake: 'exams', label: 'أنواع الاختبارات' },
+];
+
+let siteSettingsListsState = {};
+
+async function renderSiteSettingsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+
+  cachedSettings = null; // 🆕 نجبر إعادة جلب طازجة (لا نعتمد على نسخة مخزَّنة قديمة بهذي الصفحة تحديداً)
+  const settings = await getSettingsOnce();
+  siteSettingsListsState = {};
+  SETTINGS_LIST_KEYS.forEach((k) => { siteSettingsListsState[k.camel] = [...(settings[k.camel] || [])]; });
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>اسم المدرسة والشعار</h2>
+      <div class="field"><label>اسم المدرسة</label><input id="ss_schoolName" type="text" value="${escapeHtml(settings.schoolName || '')}"></div>
+      <div class="field"><label>رابط الشعار</label><input id="ss_logoUrl" type="text" value="${escapeHtml(settings.logoUrl || '')}"></div>
+      <button type="button" id="saveSiteInfoBtn">حفظ</button>
+    </div>
+
+    ${SETTINGS_LIST_KEYS.map((k) => `
+      <div class="card">
+        <h3>${escapeHtml(k.label)}</h3>
+        <div class="student-chip-list" id="ssList_${k.camel}" style="margin-bottom:10px"></div>
+        <div class="student-search-input-wrap">
+          <input type="text" id="ssAdd_${k.camel}" placeholder="أضف قيمة جديدة واضغط Enter">
+        </div>
+        <button type="button" data-save-list="${k.camel}" data-snake="${k.snake}" class="btn-outline-sm" style="margin-top:10px">حفظ ${escapeHtml(k.label)}</button>
+      </div>`).join('')}
+  `;
+
+  document.getElementById('saveSiteInfoBtn').addEventListener('click', saveSiteInfoHandler);
+
+  SETTINGS_LIST_KEYS.forEach((k) => {
+    renderSettingsChipList(k.camel);
+    document.getElementById(`ssAdd_${k.camel}`).addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const val = e.target.value.trim();
+      if (!val) return;
+      if (!siteSettingsListsState[k.camel].includes(val)) siteSettingsListsState[k.camel].push(val);
+      e.target.value = '';
+      renderSettingsChipList(k.camel);
+    });
+  });
+
+  document.querySelectorAll('[data-save-list]').forEach((btn) => {
+    btn.addEventListener('click', () => saveSettingsListHandler(btn.getAttribute('data-save-list'), btn.getAttribute('data-snake')));
+  });
+}
+
+function renderSettingsChipList(camelKey) {
+  const box = document.getElementById(`ssList_${camelKey}`);
+  const values = siteSettingsListsState[camelKey];
+  box.innerHTML = values.length
+    ? values.map((v, i) => `<span class="student-chip">${escapeHtml(v)}<span data-remove-val="${i}" data-key="${camelKey}" class="student-chip-remove">${ICONS.close()}</span></span>`).join('')
+    : '<span class="student-linker-empty">لا توجد قيم بعد</span>';
+
+  box.querySelectorAll('[data-remove-val]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const key = el.getAttribute('data-key');
+      siteSettingsListsState[key].splice(Number(el.getAttribute('data-remove-val')), 1);
+      renderSettingsChipList(key);
+    });
+  });
+}
+
+async function saveSiteInfoHandler() {
+  const btn = document.getElementById('saveSiteInfoBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+  try {
+    await apiCall('settings', {
+      method: 'POST',
+      body: { action: 'updateSite', schoolName: document.getElementById('ss_schoolName').value.trim(), logoUrl: document.getElementById('ss_logoUrl').value.trim() },
+    });
+    showToast('تم حفظ بيانات المدرسة بنجاح', 'success');
+    cachedSettings = null;
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'حفظ';
+  }
+}
+
+async function saveSettingsListHandler(camelKey, snakeKey) {
+  const values = siteSettingsListsState[camelKey];
+  if (!values.length) { showToast('يجب إدخال قيمة واحدة على الأقل', 'error'); return; }
+  try {
+    await apiCall('settings', { method: 'POST', body: { action: 'updateList', listKey: snakeKey, values } });
+    showToast('تم الحفظ بنجاح', 'success');
+    cachedSettings = null;
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
