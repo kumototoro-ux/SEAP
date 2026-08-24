@@ -208,6 +208,38 @@ button:disabled { opacity: .5; cursor: wait; }
 .search-result-sublabel { font-size: 11.5px; color: var(--text-muted); margin-top: 1px; }
 #mobileSearchResults .search-result-item { border-radius: var(--radius-sm); }
 
+/* ---------- 🆕 مكوّن ربط الطلاب بولي الأمر — حاوية أنيقة موحَّدة ---------- */
+.student-linker-box {
+  background: var(--surface); border: 1px solid var(--outline); border-radius: var(--radius);
+  padding: 16px; margin-top: 8px;
+}
+.student-search-input-wrap {
+  display: flex; align-items: center; gap: 8px; background: var(--surface-card);
+  border: 1.5px solid var(--outline); border-radius: var(--radius-sm); padding: 9px 14px; color: var(--text-muted);
+}
+.student-search-input-wrap input { border: none; background: none; outline: none; flex: 1; font-family: inherit; font-size: 13.5px; color: var(--primary); }
+
+.student-search-results { margin-top: 8px; display: none; }
+.student-search-results.show { display: block; }
+.student-search-result-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--radius-sm); cursor: pointer;
+  background: var(--surface-card); margin-bottom: 6px; border: 1px solid var(--outline);
+}
+.student-search-result-item:hover { border-color: var(--primary); }
+.student-add-icon { margin-right: auto; color: var(--primary); background: var(--accent-green); border-radius: 999px; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+.student-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.student-linker-empty { color: #aaa; font-size: 12.5px; }
+.student-chip {
+  display: inline-flex; align-items: center; gap: 8px; background: var(--accent-purple); color: var(--primary);
+  padding: 6px 8px 6px 6px; border-radius: 999px; font-size: 13px; font-weight: 600;
+}
+.student-chip-remove {
+  display: flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 999px;
+  background: rgba(32,33,36,.1); cursor: pointer; flex-shrink: 0;
+}
+.student-chip-remove:hover { background: rgba(32,33,36,.2); }
+
 /* ---------- 🆕 الشريط السفلي العائم (جوال فقط) — 4 اختصارات ثابتة ---------- */
 .bottom-nav { display: none; }
 
