@@ -3364,9 +3364,9 @@ function escapeHtml(str) {
 }
 
 /* ===================== 🆕 صفحة التقويم الدراسي (عرض فقط للجميع) ===================== */
-// تصميم شبكة تقويم شهري احترافي — بلا أي أدوات إدارة إطلاقاً (لا للأدمن
-// ولا لغيره). الإدارة الكاملة (فصول + أسابيع + إظهار/إخفاء) تعيش حصراً
-// داخل "الإعدادات ← التقويم الدراسي" (أدمن فقط، محمي أصلاً عبر ROLE_PAGES).
+// تصميم شبكة تقويم احترافي بـ3 طرق عرض (شهري/أسبوعي/الفصل الدراسي
+// كامل) — بلا أي أدوات إدارة إطلاقاً (لا للأدمن ولا لغيره). الإدارة
+// الكاملة تعيش حصراً داخل "الإعدادات ← التقويم الدراسي" (أدمن فقط).
 
 const WEEK_TYPE_META = {
   'دراسي':        { badgeClass: 'week-type-study' },
@@ -3386,7 +3386,43 @@ function parseISODateLocal(str) {
   return new Date(y, m - 1, d);
 }
 
-let calendarViewDate = new Date(); // 🆕 الشهر المعروض حالياً بالتقويم — يبدأ بالشهر الحالي
+function formatDateAr(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return parseISODateLocal(dateStr).toLocaleDateString('ar-SA-u-ca-gregory', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch (e) { return dateStr; }
+}
+
+let calendarViewDate = new Date(); // 🆕 المرساة الزمنية للعرض الشهري/الأسبوعي
+let calendarViewMode = 'month';    // 🆕 'month' | 'week' | 'term'
+let calendarSelectedTermId = null; // 🆕 الفصل المختار بعرض "الفصل الدراسي كامل"
+
+/** 🆕 يبني خارطتي تاريخ→أسبوع وتاريخ→إجازة لعرض سريع O(1) لكل يوم —
+ * الإجازة تُعرَض دائماً بالأولوية فوق الأسبوع لنفس اليوم (تراكب مقصود) */
+function buildCalendarDateMaps() {
+  const weekMap = {};
+  const holidayMap = {};
+  const termsById = {};
+  (APP.calendarTerms || []).forEach((t) => { termsById[t.id] = t; });
+
+  (APP.calendarWeeks || []).forEach((w) => {
+    let cursor = parseISODateLocal(w.start_date);
+    const end = parseISODateLocal(w.end_date);
+    while (cursor <= end) {
+      weekMap[toISODateLocal(cursor)] = { ...w, termName: termsById[w.term_id]?.name || '' };
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  });
+  (APP.calendarHolidays || []).forEach((h) => {
+    let cursor = parseISODateLocal(h.start_date);
+    const end = parseISODateLocal(h.end_date);
+    while (cursor <= end) {
+      holidayMap[toISODateLocal(cursor)] = { ...h, termName: termsById[h.term_id]?.name || '' };
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  });
+  return { weekMap, holidayMap, termsById };
+}
 
 async function renderAcademicCalendarView() {
   const main = document.getElementById('mainContent');
@@ -3402,50 +3438,70 @@ async function renderAcademicCalendarView() {
 
   APP.calendarTerms = calData.terms || [];
   APP.calendarWeeks = calData.weeks || [];
+  APP.calendarHolidays = calData.holidays || []; // 🆕
+
+  const visibleNames = APP.calendarTerms.map((t) => t.name).join('، ');
 
   main.innerHTML = `
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;flex-wrap:wrap;gap:10px">
         <div>
           <h2 style="margin:0">التقويم الدراسي</h2>
-          <p id="calendarVisibleTermsNote" style="color:#888;font-size:12px;margin:4px 0 0"></p>
+          <p style="color:#888;font-size:12px;margin:4px 0 0">${visibleNames ? `الفصول الظاهرة حالياً: ${escapeHtml(visibleNames)}` : 'لا يوجد فصل دراسي ظاهر حالياً'}</p>
+        </div>
+        <div class="segmented-control" id="calModeTabBar">
+          <button type="button" class="segmented-item ${calendarViewMode === 'month' ? 'active' : ''}" data-cal-mode="month">شهري</button>
+          <button type="button" class="segmented-item ${calendarViewMode === 'week' ? 'active' : ''}" data-cal-mode="week">أسبوعي</button>
+          <button type="button" class="segmented-item ${calendarViewMode === 'term' ? 'active' : ''}" data-cal-mode="term">الفصل الدراسي كامل</button>
         </div>
       </div>
-      <div class="calendar-toolbar">
-        <div class="calendar-toolbar-nav">
-          <button type="button" class="calendar-nav-btn" id="calPrevBtn" title="الشهر السابق">${ICONS.chevronDown()}</button>
-          <span id="calMonthLabel" class="calendar-month-label"></span>
-          <button type="button" class="calendar-nav-btn" id="calNextBtn" title="الشهر التالي">${ICONS.chevronDown()}</button>
-        </div>
-        <button type="button" id="calTodayBtn" class="btn-outline-sm">اليوم</button>
-      </div>
-      <div id="calendarGridArea"></div>
-      <div class="calendar-legend">
-        ${Object.entries(WEEK_TYPE_META).map(([type, meta]) => `<span class="calendar-legend-item"><span class="calendar-legend-dot ${meta.badgeClass}"></span>${escapeHtml(type)}</span>`).join('')}
-      </div>
+      <div id="calendarContentArea" style="margin-top:14px"></div>
     </div>`;
 
-  document.getElementById('calPrevBtn').style.transform = 'rotate(90deg)';
-  document.getElementById('calNextBtn').style.transform = 'rotate(-90deg)';
+  document.querySelectorAll('#calModeTabBar .segmented-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      calendarViewMode = btn.getAttribute('data-cal-mode');
+      document.querySelectorAll('#calModeTabBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderCalendarByMode();
+    });
+  });
 
-  const visibleNames = APP.calendarTerms.map((t) => t.name).join('، ');
-  document.getElementById('calendarVisibleTermsNote').textContent = visibleNames
-    ? `الفصول الظاهرة حالياً: ${visibleNames}`
-    : 'لا يوجد فصل دراسي ظاهر حالياً — راجع الإدارة';
-
-  document.getElementById('calPrevBtn').addEventListener('click', () => navigateCalendarMonth(-1));
-  document.getElementById('calNextBtn').addEventListener('click', () => navigateCalendarMonth(1));
-  document.getElementById('calTodayBtn').addEventListener('click', () => { calendarViewDate = new Date(); renderCalendarGrid(); });
-
-  renderCalendarGrid();
+  renderCalendarByMode();
 }
 
-function navigateCalendarMonth(delta) {
-  calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + delta, 1);
-  renderCalendarGrid();
+function renderCalendarByMode() {
+  const container = document.getElementById('calendarContentArea');
+  if (!container) return;
+  if (calendarViewMode === 'week') { renderCalendarWeekView(container); return; }
+  if (calendarViewMode === 'term') { renderCalendarTermView(container); return; }
+  renderCalendarMonthView(container);
 }
 
-function renderCalendarGrid() {
+/* -------------------- عرض شهري -------------------- */
+
+function renderCalendarMonthView(container) {
+  container.innerHTML = `
+    <div class="calendar-toolbar">
+      <div class="calendar-toolbar-nav">
+        <button type="button" class="calendar-nav-btn" id="calPrevBtn" style="transform:rotate(90deg)" title="الشهر السابق">${ICONS.chevronDown()}</button>
+        <span id="calMonthLabel" class="calendar-month-label"></span>
+        <button type="button" class="calendar-nav-btn" id="calNextBtn" style="transform:rotate(-90deg)" title="الشهر التالي">${ICONS.chevronDown()}</button>
+      </div>
+      <button type="button" id="calTodayBtn" class="btn-outline-sm">اليوم</button>
+    </div>
+    <div id="calendarGridArea"></div>
+    <div class="calendar-legend">
+      ${Object.entries(WEEK_TYPE_META).map(([type, meta]) => `<span class="calendar-legend-item"><span class="calendar-legend-dot ${meta.badgeClass}"></span>${escapeHtml(type)}</span>`).join('')}
+    </div>`;
+
+  document.getElementById('calPrevBtn').addEventListener('click', () => { calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1); renderCalendarMonthGrid(); });
+  document.getElementById('calNextBtn').addEventListener('click', () => { calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1); renderCalendarMonthGrid(); });
+  document.getElementById('calTodayBtn').addEventListener('click', () => { calendarViewDate = new Date(); renderCalendarMonthGrid(); });
+
+  renderCalendarMonthGrid();
+}
+
+function renderCalendarMonthGrid() {
   const area = document.getElementById('calendarGridArea');
   if (!area) return;
 
@@ -3453,19 +3509,7 @@ function renderCalendarGrid() {
   const monthIndex = calendarViewDate.getMonth();
   document.getElementById('calMonthLabel').textContent = calendarViewDate.toLocaleDateString('ar-SA-u-ca-gregory', { month: 'long', year: 'numeric' });
 
-  // 🆕 خارطة تاريخ → بيانات الأسبوع (لعرض سريع O(1) لكل يوم بالشبكة)
-  const dateMap = {};
-  const termsById = {};
-  APP.calendarTerms.forEach((t) => { termsById[t.id] = t; });
-  APP.calendarWeeks.forEach((w) => {
-    let cursor = parseISODateLocal(w.start_date);
-    const end = parseISODateLocal(w.end_date);
-    while (cursor <= end) {
-      dateMap[toISODateLocal(cursor)] = { ...w, termName: termsById[w.term_id]?.name || '' };
-      cursor.setDate(cursor.getDate() + 1);
-    }
-  });
-
+  const { weekMap, holidayMap } = buildCalendarDateMaps();
   const firstOfMonth = new Date(year, monthIndex, 1);
   const startWeekday = firstOfMonth.getDay(); // 0=الأحد
   const daysInThisMonth = new Date(year, monthIndex + 1, 0).getDate();
@@ -3478,48 +3522,185 @@ function renderCalendarGrid() {
     const cellDate = new Date(year, monthIndex, 1 - startWeekday + i);
     const dateStr = toISODateLocal(cellDate);
     const isCurrentMonth = cellDate.getMonth() === monthIndex;
-    const weekInfo = dateMap[dateStr];
     const isToday = dateStr === todayStr;
+    // 🆕 الإجازة تعلو الأسبوع بنفس اليوم (تراكب مقصود)
+    const holidayInfo = holidayMap[dateStr];
+    const weekInfo = weekMap[dateStr];
+    const chipInfo = holidayInfo ? { label: holidayInfo.label, badgeClass: 'week-type-holiday' } : (weekInfo ? { label: weekInfo.label || weekInfo.week_type, badgeClass: WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study' } : null);
+
     cellsHtml += `
-      <div class="calendar-cell ${isCurrentMonth ? '' : 'calendar-cell-outside'} ${isToday ? 'calendar-cell-today' : ''}" ${weekInfo ? `data-cal-day="${dateStr}"` : ''}>
+      <div class="calendar-cell ${isCurrentMonth ? '' : 'calendar-cell-outside'} ${isToday ? 'calendar-cell-today' : ''}" ${chipInfo ? `data-cal-day="${dateStr}"` : ''}>
         <span class="calendar-cell-daynum">${cellDate.getDate()}</span>
-        ${weekInfo ? `<span class="calendar-event-chip ${WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study'}">${escapeHtml(weekInfo.label || weekInfo.week_type)}</span>` : ''}
+        ${chipInfo ? `<span class="calendar-event-chip ${chipInfo.badgeClass}">${escapeHtml(chipInfo.label)}</span>` : ''}
       </div>`;
   }
 
-  area.innerHTML = `
-    <div class="calendar-grid">
-      ${dayHeaders.map((d) => `<div class="calendar-day-header">${d}</div>`).join('')}
-      ${cellsHtml}
-    </div>`;
+  area.innerHTML = `<div class="calendar-grid">${dayHeaders.map((d) => `<div class="calendar-day-header">${d}</div>`).join('')}${cellsHtml}</div>`;
 
   area.querySelectorAll('[data-cal-day]').forEach((cell) => {
-    cell.addEventListener('click', () => {
-      const info = dateMap[cell.getAttribute('data-cal-day')];
-      if (!info) return;
-      showDetailModal(`الأسبوع ${info.week_number} — ${info.week_type}`, info.termName, [
-        { label: 'التسمية', value: info.label },
-        { label: 'النوع', value: info.week_type },
-        { label: 'من', value: formatDateAr(info.start_date) },
-        { label: 'إلى', value: formatDateAr(info.end_date) },
-      ]);
-    });
+    cell.addEventListener('click', () => showCalendarDayDetail(cell.getAttribute('data-cal-day'), weekMap, holidayMap));
   });
 }
 
-function formatDateAr(dateStr) {
-  if (!dateStr) return '—';
-  try {
-    return parseISODateLocal(dateStr).toLocaleDateString('ar-SA-u-ca-gregory', { year: 'numeric', month: 'long', day: 'numeric' });
-  } catch (e) { return dateStr; }
+function showCalendarDayDetail(dateStr, weekMap, holidayMap) {
+  const holidayInfo = holidayMap[dateStr];
+  const weekInfo = weekMap[dateStr];
+  if (holidayInfo) {
+    showDetailModal('إجازة', holidayInfo.termName, [
+      { label: 'اسم الإجازة', value: holidayInfo.label },
+      { label: 'من', value: formatDateAr(holidayInfo.start_date) },
+      { label: 'إلى', value: formatDateAr(holidayInfo.end_date) },
+    ]);
+    return;
+  }
+  if (weekInfo) {
+    showDetailModal(`الأسبوع ${weekInfo.week_number} — ${weekInfo.week_type}`, weekInfo.termName, [
+      { label: 'التسمية', value: weekInfo.label },
+      { label: 'النوع', value: weekInfo.week_type },
+      { label: 'من', value: formatDateAr(weekInfo.start_date) },
+      { label: 'إلى', value: formatDateAr(weekInfo.end_date) },
+    ]);
+  }
+}
+
+/* -------------------- عرض أسبوعي -------------------- */
+
+function renderCalendarWeekView(container) {
+  container.innerHTML = `
+    <div class="calendar-toolbar">
+      <div class="calendar-toolbar-nav">
+        <button type="button" class="calendar-nav-btn" id="calWeekPrevBtn" style="transform:rotate(90deg)" title="الأسبوع السابق">${ICONS.chevronDown()}</button>
+        <span id="calWeekLabel" class="calendar-month-label"></span>
+        <button type="button" class="calendar-nav-btn" id="calWeekNextBtn" style="transform:rotate(-90deg)" title="الأسبوع التالي">${ICONS.chevronDown()}</button>
+      </div>
+      <button type="button" id="calWeekTodayBtn" class="btn-outline-sm">هذا الأسبوع</button>
+    </div>
+    <div id="calendarWeekArea"></div>
+    <div class="calendar-legend">
+      ${Object.entries(WEEK_TYPE_META).map(([type, meta]) => `<span class="calendar-legend-item"><span class="calendar-legend-dot ${meta.badgeClass}"></span>${escapeHtml(type)}</span>`).join('')}
+    </div>`;
+
+  document.getElementById('calWeekPrevBtn').addEventListener('click', () => { calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth(), calendarViewDate.getDate() - 7); renderCalendarWeekGrid(); });
+  document.getElementById('calWeekNextBtn').addEventListener('click', () => { calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth(), calendarViewDate.getDate() + 7); renderCalendarWeekGrid(); });
+  document.getElementById('calWeekTodayBtn').addEventListener('click', () => { calendarViewDate = new Date(); renderCalendarWeekGrid(); });
+
+  renderCalendarWeekGrid();
+}
+
+function renderCalendarWeekGrid() {
+  const area = document.getElementById('calendarWeekArea');
+  if (!area) return;
+
+  const { weekMap, holidayMap } = buildCalendarDateMaps();
+  const startOfWeek = new Date(calendarViewDate);
+  startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay()); // يرجع لآخر أحد
+  const todayStr = toISODateLocal(new Date());
+  const dayHeaders = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+  document.getElementById('calWeekLabel').textContent = `${formatDateAr(toISODateLocal(startOfWeek))} ← ${formatDateAr(toISODateLocal(new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() + 6)))}`;
+
+  let cellsHtml = '';
+  for (let i = 0; i < 7; i++) {
+    const cellDate = new Date(startOfWeek.getFullYear(), startOfWeek.getMonth(), startOfWeek.getDate() + i);
+    const dateStr = toISODateLocal(cellDate);
+    const isToday = dateStr === todayStr;
+    const holidayInfo = holidayMap[dateStr];
+    const weekInfo = weekMap[dateStr];
+    const chipInfo = holidayInfo ? { label: holidayInfo.label, badgeClass: 'week-type-holiday' } : (weekInfo ? { label: weekInfo.label || weekInfo.week_type, badgeClass: WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study' } : null);
+
+    cellsHtml += `
+      <div class="calendar-cell calendar-week-cell ${isToday ? 'calendar-cell-today' : ''}" ${chipInfo ? `data-cal-day="${dateStr}"` : ''}>
+        <span class="calendar-cell-daynum">${cellDate.getDate()}</span>
+        ${chipInfo ? `<span class="calendar-event-chip ${chipInfo.badgeClass}">${escapeHtml(chipInfo.label)}</span>` : '<span style="color:#bbb;font-size:11px">لا يوجد</span>'}
+      </div>`;
+  }
+
+  area.innerHTML = `<div class="calendar-grid">${dayHeaders.map((d) => `<div class="calendar-day-header">${d}</div>`).join('')}${cellsHtml}</div>`;
+
+  area.querySelectorAll('[data-cal-day]').forEach((cell) => {
+    cell.addEventListener('click', () => showCalendarDayDetail(cell.getAttribute('data-cal-day'), weekMap, holidayMap));
+  });
+}
+
+/* -------------------- عرض الفصل الدراسي كامل -------------------- */
+
+function renderCalendarTermView(container) {
+  const terms = APP.calendarTerms || [];
+  if (!terms.length) { container.innerHTML = '<p style="color:#888">لا يوجد فصل دراسي ظاهر حالياً</p>'; return; }
+  if (!calendarSelectedTermId || !terms.some((t) => String(t.id) === String(calendarSelectedTermId))) {
+    calendarSelectedTermId = terms[0].id;
+  }
+
+  container.innerHTML = `
+    ${terms.length > 1 ? `
+      <div class="field" style="max-width:340px">
+        <label>اختر الفصل الدراسي</label>
+        <select id="calTermSelect">
+          ${terms.map((t) => `<option value="${t.id}" ${String(t.id) === String(calendarSelectedTermId) ? 'selected' : ''}>${escapeHtml(t.name)} — ${escapeHtml(t.academic_year)}</option>`).join('')}
+        </select>
+      </div>` : ''}
+    <div id="calendarTermTimelineArea" style="margin-top:14px"></div>`;
+
+  if (terms.length > 1) {
+    document.getElementById('calTermSelect').addEventListener('change', (e) => { calendarSelectedTermId = e.target.value; renderCalendarTermTimeline(); });
+  }
+  renderCalendarTermTimeline();
+}
+
+function renderCalendarTermTimeline() {
+  const area = document.getElementById('calendarTermTimelineArea');
+  const term = (APP.calendarTerms || []).find((t) => String(t.id) === String(calendarSelectedTermId));
+  if (!term) { area.innerHTML = ''; return; }
+
+  const termWeeks = (APP.calendarWeeks || []).filter((w) => String(w.term_id) === String(term.id))
+    .map((w) => ({ ...w, _kind: 'week' }));
+  const termHolidays = (APP.calendarHolidays || []).filter((h) => String(h.term_id) === String(term.id))
+    .map((h) => ({ ...h, _kind: 'holiday' }));
+
+  const timeline = [...termWeeks, ...termHolidays].sort((a, b) => (a.start_date || '').localeCompare(b.start_date || ''));
+
+  if (!timeline.length) {
+    area.innerHTML = `<p style="color:#888">لا توجد أسابيع أو إجازات مضافة لهذا الفصل بعد</p>`;
+    return;
+  }
+
+  area.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+      <div style="font-weight:800;font-size:15px">${escapeHtml(term.name)} <span style="font-weight:600;font-size:12px;color:#888">— الفصل ${term.term_number === 1 ? 'الأول' : 'الثاني'} — ${escapeHtml(term.academic_year)}</span></div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${formatDateAr(term.start_date)} ← ${formatDateAr(term.end_date)}</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${timeline.map((item) => {
+        if (item._kind === 'holiday') {
+          return `
+            <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="week-type-badge week-type-holiday">إجازة</span>
+                <span style="font-size:12.5px;font-weight:700">${escapeHtml(item.label)}</span>
+              </div>
+              <span style="font-size:11.5px;color:var(--text-muted)">${formatDateAr(item.start_date)} ← ${formatDateAr(item.end_date)}</span>
+            </div>`;
+        }
+        const meta = WEEK_TYPE_META[item.week_type] || WEEK_TYPE_META['دراسي'];
+        return `
+          <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-weight:700;font-size:12.5px">الأسبوع ${item.week_number}</span>
+              <span class="week-type-badge ${meta.badgeClass}">${escapeHtml(item.week_type)}</span>
+              <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(item.label || '')}</span>
+            </div>
+            <span style="font-size:11.5px;color:var(--text-muted)">${formatDateAr(item.start_date)} ← ${formatDateAr(item.end_date)}</span>
+          </div>`;
+      }).join('')}
+    </div>`;
 }
 
 /* ===================== 🆕 إدارة التقويم الدراسي (داخل الإعدادات — أدمن فقط) ===================== */
 // نفس فلسفة بقية أقسام الإعدادات: لا توليد تلقائي لأي شيء — الأدمن يضيف
-// كل فصل وكل أسبوع بنفسه يدوياً (تواريخ، نوع، تسمية)، ويتحكّم بإظهار كل
-// فصل لكل الموظفين بشكل مستقل عن الآخر.
+// كل فصل وكل أسبوع وكل إجازة بنفسه يدوياً (تواريخ، نوع، تسمية)، ويتحكّم
+// بإظهار كل فصل لكل الموظفين بشكل مستقل عن الآخر.
 
-let academicCalendarActiveTermId = null; // null = عرض قائمة الفصول، وإلا = إدارة أسابيع هذا الفصل
+let academicCalendarActiveTermId = null; // null = عرض قائمة الفصول، وإلا = إدارة أسابيع/إجازات هذا الفصل
 
 async function renderSettingsAcademicCalendarSection(content) {
   if (academicCalendarActiveTermId) {
@@ -3544,7 +3725,7 @@ async function renderAcademicTermsManagerSection(content) {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
       <div>
         <h2 style="margin:0">التقويم الدراسي</h2>
-        <p style="color:#888;font-size:12.5px;margin:4px 0 0">أضف الفصول الدراسية، ثم أدر أسابيع كل فصل يدوياً بنفسك — بلا أي توليد تلقائي</p>
+        <p style="color:#888;font-size:12.5px;margin:4px 0 0">أضف الفصول الدراسية، ثم أدر أسابيع وإجازات كل فصل يدوياً بنفسك — بلا أي توليد تلقائي</p>
       </div>
       <button type="button" id="addTermSettingsBtn">${ICONS.plus()} فصل دراسي جديد</button>
     </div>
@@ -3579,7 +3760,7 @@ function renderTermSettingsList() {
           <button type="button" class="btn-icon-delete" data-delete-term="${t.id}" title="حذف">${ICONS.trash()}</button>
         </div>
       </div>
-      <button type="button" class="btn-outline-sm" data-manage-weeks="${t.id}" style="margin-top:12px">${ICONS.calendar()} إدارة الأسابيع</button>
+      <button type="button" class="btn-outline-sm" data-manage-weeks="${t.id}" style="margin-top:12px">${ICONS.calendar()} إدارة الأسابيع والإجازات</button>
     </div>`).join('');
 
   area.querySelectorAll('[data-manage-weeks]').forEach((btn) => {
@@ -3651,7 +3832,7 @@ async function saveTermSettingsSubmit(existingId) {
 }
 
 function deleteTermSettingsConfirm(termId) {
-  if (!confirm('حذف هذا الفصل الدراسي سيحذف كل أسابيعه المُضافة يدوياً نهائياً. هل أنت متأكد؟')) return;
+  if (!confirm('حذف هذا الفصل الدراسي سيحذف كل أسابيعه وإجازاته المُضافة يدوياً نهائياً. هل أنت متأكد؟')) return;
   (async () => {
     try {
       await apiCall('academic-config', { method: 'POST', body: { action: 'deleteTerm', id: termId } });
@@ -3671,36 +3852,52 @@ async function toggleTermVisibilitySettings(termId, currentlyVisible) {
   } catch (e) { showToast(e.message, 'error'); }
 }
 
-/* -------------------- إدارة أسابيع فصل معيّن (يدوياً بالكامل) -------------------- */
+/* -------------------- إدارة أسابيع وإجازات فصل معيّن (يدوياً بالكامل) -------------------- */
 
 async function renderAcademicWeeksManagerSection(content) {
   const term = (APP.allAcademicTermsSettings || []).find((t) => String(t.id) === String(academicCalendarActiveTermId));
   content.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
 
-  let weeks;
+  let weeks, holidays;
   try {
-    weeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId: academicCalendarActiveTermId } });
+    [weeks, holidays] = await Promise.all([
+      apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId: academicCalendarActiveTermId } }),
+      apiCall('academic-config', { method: 'POST', body: { action: 'listHolidaysForTerm', termId: academicCalendarActiveTermId } }),
+    ]);
   } catch (e) {
     content.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
     return;
   }
   APP.currentTermWeeks = weeks;
+  APP.currentTermHolidays = holidays; // 🆕
 
   content.innerHTML = `
     <button type="button" id="backToTermsBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;margin-bottom:14px;display:flex;align-items:center;gap:4px">→ رجوع لقائمة الفصول</button>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-      <div>
-        <h2 style="margin:0">أسابيع: ${term ? escapeHtml(term.name) : ''}</h2>
-        <p style="color:#888;font-size:12.5px;margin:4px 0 0">${term ? `${formatDateAr(term.start_date)} ← ${formatDateAr(term.end_date)}` : ''} — أضف كل أسبوع بنفسك وحدّد تاريخه ونوعه</p>
-      </div>
+    <div style="margin-bottom:16px">
+      <h2 style="margin:0">${term ? escapeHtml(term.name) : ''}</h2>
+      <p style="color:#888;font-size:12.5px;margin:4px 0 0">${term ? `${formatDateAr(term.start_date)} ← ${formatDateAr(term.end_date)}` : ''}</p>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+      <h3 style="margin:0">الأسابيع الدراسية</h3>
       <button type="button" id="addWeekBtn">${ICONS.plus()} إضافة أسبوع</button>
     </div>
     <div id="weekFormCard" style="display:none;margin-bottom:16px"></div>
-    <div id="weeksSettingsListArea"></div>`;
+    <div id="weeksSettingsListArea" style="margin-bottom:28px"></div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+      <h3 style="margin:0">🆕 الإجازات ضمن هذا الفصل</h3>
+      <button type="button" id="addHolidayBtn">${ICONS.plus()} إضافة إجازة</button>
+    </div>
+    <p style="color:#888;font-size:11.5px;margin-top:-6px">الإجازة مستقلة عن الأسابيع — قد تقع داخل أسبوع دراسي واحد أو تمتد لتغطي أكثر من أسبوع، وطولها حر بالكامل (يوم واحد إلى عدة أيام)</p>
+    <div id="holidayFormCard" style="display:none;margin:12px 0 16px"></div>
+    <div id="holidaysSettingsListArea"></div>`;
 
   document.getElementById('backToTermsBtn').addEventListener('click', () => { academicCalendarActiveTermId = null; renderSettingsSection(); });
   document.getElementById('addWeekBtn').addEventListener('click', () => openWeekForm());
+  document.getElementById('addHolidayBtn').addEventListener('click', () => openHolidayForm());
   renderWeeksSettingsList();
+  renderHolidaysSettingsList();
 }
 
 function renderWeeksSettingsList() {
@@ -3755,10 +3952,10 @@ function openWeekForm(week = null) {
         ${typeOptions.map((t) => `<option value="${escapeHtml(t)}" ${week && week.week_type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
       </select>
     </div>
-    <div class="field"><label>التسمية</label><input type="text" id="week_label" value="${week ? escapeHtml(week.label || '') : `الأسبوع ${nextWeekNumber}`}" placeholder="مثال: الأسبوع ${nextWeekNumber}، أو اسم الإجازة لو كان النوع إجازة"></div>
-    <p style="color:#888;font-size:11.5px;margin-top:-6px">💡 لو اخترت النوع "إجازة"، اكتب بالتسمية اسم الإجازة مباشرة (مثال: إجازة مطر، إجازة الربيع، اليوم الوطني)</p>
+    <div class="field"><label>التسمية</label><input type="text" id="week_label" value="${week ? escapeHtml(week.label || '') : `الأسبوع ${nextWeekNumber}`}" placeholder="مثال: الأسبوع ${nextWeekNumber}"></div>
     <div class="field"><label>تاريخ البداية</label><input type="date" id="week_start" value="${week ? week.start_date : ''}"></div>
     <div class="field"><label>تاريخ النهاية</label><input type="date" id="week_end" value="${week ? week.end_date : ''}"></div>
+    <p style="color:#888;font-size:11.5px;margin-top:-6px">💡 عندك إجازات ضمن هذا الأسبوع؟ أضفها بشكل مستقل من قسم "الإجازات" أسفل — يقدر يقع جزء منها داخل هذا الأسبوع بالضبط</p>
     <div style="display:flex;gap:10px;margin-top:14px">
       <button type="button" id="saveWeekBtn">${week ? 'حفظ التعديلات' : 'إضافة الأسبوع'}</button>
       <button type="button" id="cancelWeekBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
@@ -3805,6 +4002,98 @@ function deleteWeekConfirm(weekId) {
       showToast('تم حذف الأسبوع', 'success');
       APP.currentTermWeeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId: academicCalendarActiveTermId } });
       renderWeeksSettingsList();
+    } catch (e) { showToast(e.message, 'error'); }
+  })();
+}
+
+/* 🆕 -------------------- إدارة الإجازات (مستقلة عن الأسابيع) -------------------- */
+
+function renderHolidaysSettingsList() {
+  const area = document.getElementById('holidaysSettingsListArea');
+  const holidays = [...(APP.currentTermHolidays || [])].sort((a, b) => (a.start_date || '').localeCompare(b.start_date || ''));
+
+  if (!holidays.length) { area.innerHTML = '<p style="color:#888">لا توجد إجازات مضافة بعد لهذا الفصل</p>'; return; }
+
+  area.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${holidays.map((h) => `
+        <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="week-type-badge week-type-holiday">إجازة</span>
+            <span style="font-size:12.5px;font-weight:700">${escapeHtml(h.label)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:11.5px;color:var(--text-muted)">${formatDateAr(h.start_date)} ← ${formatDateAr(h.end_date)}</span>
+            <button type="button" class="btn-icon-edit" data-edit-holiday="${h.id}" title="تعديل">${ICONS.edit()}</button>
+            <button type="button" class="btn-icon-delete" data-delete-holiday="${h.id}" title="حذف">${ICONS.trash()}</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  area.querySelectorAll('[data-edit-holiday]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const holiday = holidays.find((h) => String(h.id) === btn.getAttribute('data-edit-holiday'));
+      if (holiday) openHolidayForm(holiday);
+    });
+  });
+  area.querySelectorAll('[data-delete-holiday]').forEach((btn) => {
+    btn.addEventListener('click', () => deleteHolidayConfirm(btn.getAttribute('data-delete-holiday')));
+  });
+}
+
+function openHolidayForm(holiday = null) {
+  const card = document.getElementById('holidayFormCard');
+  card.style.display = 'block';
+  card.className = 'card';
+  card.innerHTML = `
+    <h3 style="margin-top:0">${holiday ? 'تعديل إجازة' : 'إضافة إجازة جديدة'}</h3>
+    <div class="field"><label>اسم الإجازة</label><input type="text" id="holiday_label" value="${holiday ? escapeHtml(holiday.label) : ''}" placeholder="مثال: إجازة مطر، إجازة الربيع، اليوم الوطني"></div>
+    <div class="field"><label>تاريخ البداية</label><input type="date" id="holiday_start" value="${holiday ? holiday.start_date : ''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" id="holiday_end" value="${holiday ? holiday.end_date : ''}"></div>
+    <p style="color:#888;font-size:11.5px;margin-top:-6px">💡 حدّد أي مدى تاريخي تبيه — يوم واحد، يومين، أو حتى 11 يوماً أو أكثر، طالما ضمن تواريخ الفصل الدراسي</p>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button type="button" id="saveHolidayBtn">${holiday ? 'حفظ التعديلات' : 'إضافة الإجازة'}</button>
+      <button type="button" id="cancelHolidayBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
+    </div>`;
+
+  document.getElementById('cancelHolidayBtn').addEventListener('click', () => { card.style.display = 'none'; card.innerHTML = ''; });
+  document.getElementById('saveHolidayBtn').addEventListener('click', () => saveHolidayFormSubmit(holiday ? holiday.id : null));
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveHolidayFormSubmit(existingId) {
+  const label = document.getElementById('holiday_label').value.trim();
+  const startDate = document.getElementById('holiday_start').value;
+  const endDate = document.getElementById('holiday_end').value;
+
+  if (!label) { showToast('اسم الإجازة مطلوب', 'error'); return; }
+  if (!startDate || !endDate) { showToast('حدّد تاريخ البداية والنهاية', 'error'); return; }
+  if (endDate < startDate) { showToast('تاريخ النهاية يجب أن يكون بعد تاريخ البداية', 'error'); return; }
+
+  const btn = document.getElementById('saveHolidayBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+  try {
+    const body = existingId
+      ? { action: 'updateHoliday', id: existingId, label, startDate, endDate }
+      : { action: 'addHoliday', termId: academicCalendarActiveTermId, label, startDate, endDate };
+    await apiCall('academic-config', { method: 'POST', body });
+    showToast('تم حفظ الإجازة بنجاح', 'success');
+    document.getElementById('holidayFormCard').style.display = 'none';
+    document.getElementById('holidayFormCard').innerHTML = '';
+    APP.currentTermHolidays = await apiCall('academic-config', { method: 'POST', body: { action: 'listHolidaysForTerm', termId: academicCalendarActiveTermId } });
+    renderHolidaysSettingsList();
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = existingId ? 'حفظ التعديلات' : 'إضافة الإجازة'; }
+}
+
+function deleteHolidayConfirm(holidayId) {
+  if (!confirm('حذف هذي الإجازة نهائياً. هل أنت متأكد؟')) return;
+  (async () => {
+    try {
+      await apiCall('academic-config', { method: 'POST', body: { action: 'deleteHoliday', id: holidayId } });
+      showToast('تم حذف الإجازة', 'success');
+      APP.currentTermHolidays = await apiCall('academic-config', { method: 'POST', body: { action: 'listHolidaysForTerm', termId: academicCalendarActiveTermId } });
+      renderHolidaysSettingsList();
     } catch (e) { showToast(e.message, 'error'); }
   })();
 }
