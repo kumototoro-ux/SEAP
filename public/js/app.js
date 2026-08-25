@@ -71,6 +71,7 @@ const APP = { token: null, user: null };
  */
 const PAGE_REGISTRY = {
   home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
+  academicCalendar: { label: 'التقويم الدراسي', icon: 'calendar', render: renderAcademicCalendarView }, // 🆕
   employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
   parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
@@ -90,12 +91,14 @@ const PAGE_REGISTRY = {
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  role_admin: ['home', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
-  role_teacher: ['home', 'messages', 'studentAttendance', 'performance'],
-  role_student_sup: ['home', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
-  role_teacher_sup: ['home', 'messages', 'staffAttendance', 'performance', 'reports'],
-  Admission: ['home', 'messages', 'students', 'parents', 'familyAccounts'],
-  role_branch_monitor: ['home', 'messages', 'staffAttendance', 'performance', 'reports'],
+  // 🆕 أُضيفت 'academicCalendar' لكل الأدوار — كل الأدوار تملك صفحة "التقويم
+  // الدراسي" حسب خارطة الصلاحيات الموثَّقة أعلاه (عرض فقط لغير الأدمن)
+  role_admin: ['home', 'academicCalendar', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
+  role_teacher: ['home', 'academicCalendar', 'messages', 'studentAttendance', 'performance'],
+  role_student_sup: ['home', 'academicCalendar', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
+  role_teacher_sup: ['home', 'academicCalendar', 'messages', 'staffAttendance', 'performance', 'reports'],
+  Admission: ['home', 'academicCalendar', 'messages', 'students', 'parents', 'familyAccounts'],
+  role_branch_monitor: ['home', 'academicCalendar', 'messages', 'staffAttendance', 'performance', 'reports'],
 };
 
 function pagesForCurrentUser() {
@@ -107,6 +110,7 @@ function pagesForCurrentUser() {
  * تصبح فارغة لدور معيّن (كل صفحاتها غير مصرَّح له بها) تختفي تلقائياً بلا أثر. */
 const SIDEBAR_GROUPS = [
   { type: 'single', key: 'home' },
+  { type: 'single', key: 'academicCalendar' }, // 🆕
   { type: 'single', key: 'messages' },
   { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
   { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
@@ -3351,6 +3355,219 @@ function openSearchModal() {
 function escapeHtml(str) {
   if (str === null || str === undefined) return '';
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/* ===================== 🆕 صفحة التقويم الدراسي ===================== */
+// فصلان دراسيان (أول/ثاني) لكل عام دراسي، كل فصل مقسَّم لأسابيع تُولَّد
+// تلقائياً من تواريخ البداية/النهاية. الأدمن فقط يضيف/يعدّل/يحذف —
+// باقي الأدوار عرض فقط (حسب خارطة الصلاحيات الموثَّقة أعلى الملف).
+// هذي الصفحة أساس بنائي لصفحات قادمة (الحصص، التكاليف، الدرجات).
+
+async function renderAcademicCalendarView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
+  const isAdmin = APP.user.role === 'role_admin';
+
+  try {
+    APP.allAcademicTerms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+  } catch (e) {
+    main.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`;
+    return;
+  }
+
+  main.innerHTML = `
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0">التقويم الدراسي</h2>
+        <p style="color:#888;font-size:12.5px;margin:4px 0 0">الفصول الدراسية والأسابيع — الأساس لكل صفحات الدرجات والتكاليف القادمة</p>
+      </div>
+      ${isAdmin ? `<button type="button" id="addTermBtn">${ICONS.plus()} فصل دراسي جديد</button>` : ''}
+    </div>
+    <div id="termFormCard" style="display:none"></div>
+    <div id="termsListArea"></div>`;
+
+  if (isAdmin) {
+    document.getElementById('addTermBtn').addEventListener('click', () => openTermForm());
+  }
+  renderTermsList();
+}
+
+function renderTermsList() {
+  const area = document.getElementById('termsListArea');
+  const isAdmin = APP.user.role === 'role_admin';
+  const terms = APP.allAcademicTerms || [];
+
+  if (!terms.length) {
+    area.innerHTML = `<div class="card"><p style="color:#888">لا توجد فصول دراسية مضافة بعد${isAdmin ? ' — أضف الفصل الأول من الزر أعلاه' : ''}</p></div>`;
+    return;
+  }
+
+  // ترتيب: العام الدراسي الأحدث أولاً، ثم رقم الفصل تصاعدياً
+  const sorted = [...terms].sort((a, b) =>
+    (b.academic_year || '').localeCompare(a.academic_year || '') || (a.term_number || 0) - (b.term_number || 0));
+
+  area.innerHTML = sorted.map((t) => `
+    <div class="card" style="margin-bottom:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-weight:800;font-size:15px">${escapeHtml(t.name)} <span style="font-weight:600;font-size:12px;color:#888">— الفصل ${t.term_number === 1 ? 'الأول' : 'الثاني'} — ${escapeHtml(t.academic_year)}</span></div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${formatDateAr(t.start_date)} ← ${formatDateAr(t.end_date)}</div>
+        </div>
+        ${isAdmin ? `
+          <div style="display:flex;gap:4px">
+            <button type="button" class="btn-icon-edit" data-edit-term="${t.id}" title="تعديل">${ICONS.edit()}</button>
+            <button type="button" class="btn-icon-delete" data-delete-term="${t.id}" title="حذف">${ICONS.trash()}</button>
+          </div>` : ''}
+      </div>
+      <button type="button" data-toggle-weeks="${t.id}" style="margin-top:12px;background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;display:flex;align-items:center;gap:4px">${ICONS.chevronDown()} عرض الأسابيع</button>
+      <div id="weeksArea_${t.id}" style="display:none;margin-top:10px"></div>
+    </div>`).join('');
+
+  area.querySelectorAll('[data-toggle-weeks]').forEach((btn) => {
+    btn.addEventListener('click', () => toggleTermWeeks(btn.getAttribute('data-toggle-weeks'), btn));
+  });
+  if (isAdmin) {
+    area.querySelectorAll('[data-edit-term]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const term = terms.find((t) => String(t.id) === btn.getAttribute('data-edit-term'));
+        if (term) openTermForm(term);
+      });
+    });
+    area.querySelectorAll('[data-delete-term]').forEach((btn) => {
+      btn.addEventListener('click', () => deleteTermConfirm(btn.getAttribute('data-delete-term')));
+    });
+  }
+}
+
+async function toggleTermWeeks(termId, btnEl) {
+  const area = document.getElementById(`weeksArea_${termId}`);
+  const isOpen = area.style.display !== 'none';
+  if (isOpen) {
+    area.style.display = 'none';
+    btnEl.innerHTML = `${ICONS.chevronDown()} عرض الأسابيع`;
+    return;
+  }
+  area.style.display = 'block';
+  btnEl.innerHTML = `${ICONS.chevronDown()} إخفاء الأسابيع`;
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  try {
+    const weeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId } });
+    renderWeeksTable(termId, weeks);
+  } catch (e) {
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function renderWeeksTable(termId, weeks) {
+  const area = document.getElementById(`weeksArea_${termId}`);
+  const isAdmin = APP.user.role === 'role_admin';
+  if (!weeks.length) { area.innerHTML = '<p style="color:#888;font-size:12.5px">لا توجد أسابيع (تحقّق من تواريخ الفصل)</p>'; return; }
+
+  area.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${weeks.map((w) => `
+        <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
+          <div>
+            <span style="font-weight:700;font-size:12.5px">الأسبوع ${w.week_number}</span>
+            <span style="font-size:12px;color:var(--text-muted);margin-inline-start:8px" data-week-label="${w.id}">${escapeHtml(w.label || '')}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:11.5px;color:var(--text-muted)">${formatDateAr(w.start_date)} ← ${formatDateAr(w.end_date)}</span>
+            ${isAdmin ? `<button type="button" class="btn-icon-edit" data-rename-week="${w.id}" title="إعادة تسمية">${ICONS.edit()}</button>` : ''}
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  if (isAdmin) {
+    area.querySelectorAll('[data-rename-week]').forEach((btn) => {
+      btn.addEventListener('click', () => renameWeekPrompt(btn.getAttribute('data-rename-week'), termId));
+    });
+  }
+}
+
+async function renameWeekPrompt(weekId, termId) {
+  const labelSpan = document.querySelector(`[data-week-label="${weekId}"]`);
+  const currentLabel = labelSpan ? labelSpan.textContent : '';
+  const newLabel = prompt('اسم الأسبوع الجديد:', currentLabel);
+  if (newLabel === null) return; // 🆕 المستخدم ألغى — لا نرسل شيء
+  if (!newLabel.trim()) { showToast('الاسم لا يجب أن يكون فارغاً', 'error'); return; }
+  try {
+    await apiCall('academic-config', { method: 'POST', body: { action: 'renameWeek', id: weekId, label: newLabel.trim() } });
+    showToast('تم تحديث اسم الأسبوع', 'success');
+    const weeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId } });
+    renderWeeksTable(termId, weeks);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+function openTermForm(term = null) {
+  const card = document.getElementById('termFormCard');
+  card.style.display = 'block';
+  card.className = 'card';
+  card.innerHTML = `
+    <h3 style="margin-top:0">${term ? 'تعديل فصل دراسي' : 'إضافة فصل دراسي جديد'}</h3>
+    ${term ? `<p style="color:#c47a00;font-size:12px;background:#fff6e5;padding:8px 10px;border-radius:8px">⚠️ تعديل تواريخ الفصل يعيد توليد كل أسابيعه تلقائياً — أي تسميات مخصَّصة للأسابيع الحالية ستُفقَد</p>` : ''}
+    <div class="field"><label>اسم الفصل</label><input type="text" id="term_name" value="${term ? escapeHtml(term.name) : ''}" placeholder="مثال: الفصل الدراسي الأول"></div>
+    <div class="field"><label>رقم الفصل</label>
+      <select id="term_number">
+        <option value="1" ${term && term.term_number === 1 ? 'selected' : ''}>الفصل الأول</option>
+        <option value="2" ${term && term.term_number === 2 ? 'selected' : ''}>الفصل الثاني</option>
+      </select>
+    </div>
+    <div class="field"><label>العام الدراسي</label><input type="text" id="term_year" value="${term ? escapeHtml(term.academic_year) : ''}" placeholder="مثال: 1447هـ أو 2025-2026"></div>
+    <div class="field"><label>تاريخ البداية</label><input type="date" id="term_start" value="${term ? term.start_date : ''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" id="term_end" value="${term ? term.end_date : ''}"></div>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button type="button" id="saveTermBtn">${term ? 'حفظ التعديلات' : 'إضافة الفصل'}</button>
+      <button type="button" id="cancelTermBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
+    </div>`;
+
+  document.getElementById('cancelTermBtn').addEventListener('click', () => { card.style.display = 'none'; card.innerHTML = ''; });
+  document.getElementById('saveTermBtn').addEventListener('click', () => saveTermSubmit(term ? term.id : null));
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveTermSubmit(existingId) {
+  const name = document.getElementById('term_name').value.trim();
+  const termNumber = Number(document.getElementById('term_number').value);
+  const academicYear = document.getElementById('term_year').value.trim();
+  const startDate = document.getElementById('term_start').value;
+  const endDate = document.getElementById('term_end').value;
+
+  if (!name || !academicYear || !startDate || !endDate) { showToast('أكمل كل الحقول', 'error'); return; }
+  if (endDate < startDate) { showToast('تاريخ النهاية يجب أن يكون بعد تاريخ البداية', 'error'); return; }
+
+  const btn = document.getElementById('saveTermBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+  try {
+    const body = { action: 'saveTerm', name, termNumber, academicYear, startDate, endDate };
+    if (existingId) body.id = existingId;
+    await apiCall('academic-config', { method: 'POST', body });
+    showToast('تم حفظ الفصل الدراسي وتوليد الأسابيع بنجاح', 'success');
+    document.getElementById('termFormCard').style.display = 'none';
+    document.getElementById('termFormCard').innerHTML = '';
+    APP.allAcademicTerms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+    renderTermsList();
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = existingId ? 'حفظ التعديلات' : 'إضافة الفصل'; }
+}
+
+function deleteTermConfirm(termId) {
+  if (!confirm('حذف هذا الفصل الدراسي سيحذف كل أسابيعه المرتبطة به نهائياً. هل أنت متأكد؟')) return;
+  (async () => {
+    try {
+      await apiCall('academic-config', { method: 'POST', body: { action: 'deleteTerm', id: termId } });
+      showToast('تم حذف الفصل الدراسي', 'success');
+      APP.allAcademicTerms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+      renderTermsList();
+    } catch (e) { showToast(e.message, 'error'); }
+  })();
+}
+
+function formatDateAr(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return new Date(dateStr).toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch (e) { return dateStr; }
 }
 
 /* ===================== نقطة الانطلاق ===================== */
