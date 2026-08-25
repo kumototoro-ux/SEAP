@@ -102,6 +102,51 @@ function pagesForCurrentUser() {
   return ROLE_PAGES[APP.user.role] || ['home'];
 }
 
+/** 🆕 مجموعات القائمة الجانبية — عنوان رئيسي بلا مجموعة (رئيسية/مراسلات/تقارير)،
+ * وقوائم منسدلة قابلة للطيّ لكل فئة (الطلاب، الموظفون، الإدارة). أي مجموعة
+ * تصبح فارغة لدور معيّن (كل صفحاتها غير مصرَّح له بها) تختفي تلقائياً بلا أثر. */
+const SIDEBAR_GROUPS = [
+  { type: 'single', key: 'home' },
+  { type: 'single', key: 'messages' },
+  { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
+  { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
+  { type: 'single', key: 'reports' },
+  { type: 'group', label: 'الإدارة والإعدادات', icon: 'settingsGear', items: ['auditLog', 'siteSettings'] },
+];
+
+function renderGroupedSidebarNav(pages, activeView) {
+  const singleLinkHtml = (key) => `<a data-view="${key}" title="${escapeHtml(PAGE_REGISTRY[key].label)}">${ICONS[PAGE_REGISTRY[key].icon]()}<span>${escapeHtml(PAGE_REGISTRY[key].label)}</span></a>`;
+
+  const html = SIDEBAR_GROUPS.map((g) => {
+    if (g.type === 'single') {
+      return pages.includes(g.key) ? singleLinkHtml(g.key) : '';
+    }
+    const visibleItems = g.items.filter((k) => pages.includes(k));
+    if (!visibleItems.length) return '';
+    const isActiveGroup = visibleItems.includes(activeView);
+    return `
+      <div class="sidebar-group">
+        <button type="button" class="sidebar-group-header ${isActiveGroup ? 'expanded' : ''}" data-group-toggle>
+          ${ICONS[g.icon]()}<span>${escapeHtml(g.label)}</span>${ICONS.chevronDown()}
+        </button>
+        <div class="sidebar-group-items" style="display:${isActiveGroup ? 'block' : 'none'}">
+          ${visibleItems.map(singleLinkHtml).join('')}
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById('sidebarNav').innerHTML = html;
+
+  document.querySelectorAll('[data-group-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const itemsBox = btn.nextElementSibling;
+      const willOpen = itemsBox.style.display !== 'block';
+      itemsBox.style.display = willOpen ? 'block' : 'none';
+      btn.classList.toggle('expanded', willOpen);
+    });
+  });
+}
+
 /* ===================== تسجيل الدخول ===================== */
 
 function renderLogin() {
@@ -252,9 +297,8 @@ function renderShell() {
     </div>`;
 
   const pages = pagesForCurrentUser();
-  document.getElementById('sidebarNav').innerHTML = pages
-    .map((key) => `<a data-view="${key}" title="${PAGE_REGISTRY[key].label}">${ICONS[PAGE_REGISTRY[key].icon]()}<span>${PAGE_REGISTRY[key].label}</span></a>`)
-    .join('');
+  const lastView = localStorage.getItem('mirqat_lastView');
+  renderGroupedSidebarNav(pages, lastView);
 
   document.querySelectorAll('#sidebarNav a').forEach((a) => {
     a.addEventListener('click', () => { navigate(a.getAttribute('data-view')); closeSidebarMobile(); });
@@ -365,6 +409,13 @@ function navigate(view) {
   document.querySelectorAll('#sidebarNav a').forEach((a) => {
     a.classList.toggle('active', a.getAttribute('data-view') === view);
   });
+  // 🆕 لو الصفحة النشطة داخل مجموعة قابلة للطيّ، افتحها تلقائياً حتى تظهر
+  const activeLink = document.querySelector(`#sidebarNav a[data-view="${view}"]`);
+  const parentGroupItems = activeLink?.closest('.sidebar-group-items');
+  if (parentGroupItems) {
+    parentGroupItems.style.display = 'block';
+    parentGroupItems.previousElementSibling?.classList.add('expanded');
+  }
   PAGE_REGISTRY[view].render();
 
   const main = document.getElementById('mainContent');
@@ -2502,8 +2553,8 @@ function renderBarChartSVG(items, color) {
         const y = i * rowHeight;
         const barWidth = Math.max(4, (item.value / maxVal) * 260);
         return `
-          <text x="398" y="${y + 14}" text-anchor="end" font-size="11" font-weight="700" fill="var(--primary)">${escapeHtml(item.label.length > 18 ? item.label.slice(0, 18) + '…' : item.label)}</text>
-          <rect x="${398 - 260}" y="${y + 18}" width="260" height="10" rx="5" fill="var(--surface)"></rect>
+          <text x="398" y="${y + 14}" text-anchor="end" font-size="11" font-weight="700" fill="#202124">${escapeHtml(item.label.length > 18 ? item.label.slice(0, 18) + '…' : item.label)}</text>
+          <rect x="${398 - 260}" y="${y + 18}" width="260" height="10" rx="5" fill="#EDEDEA"></rect>
           <rect x="${398 - barWidth}" y="${y + 18}" width="${barWidth}" height="10" rx="5" fill="${color}"></rect>
           <text x="${398 - 265}" y="${y + 27}" text-anchor="end" font-size="10" font-weight="800" fill="${color}">${item.value}</text>
         `;
@@ -2519,7 +2570,7 @@ function renderGaugeSVG(value) {
   const color = value >= 85 ? '#2F7A4D' : value >= 65 ? '#B8860B' : '#C4483A';
   return `
     <svg width="100" height="100" viewBox="0 0 100 100" style="flex-shrink:0">
-      <circle cx="50" cy="50" r="${radius}" fill="none" stroke="var(--surface)" stroke-width="10"></circle>
+      <circle cx="50" cy="50" r="${radius}" fill="none" stroke="#EDEDEA" stroke-width="10"></circle>
       <circle cx="50" cy="50" r="${radius}" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round"
         stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 50 50)"></circle>
     </svg>`;
