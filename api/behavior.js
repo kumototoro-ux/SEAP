@@ -56,6 +56,31 @@ async function handleAdd(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/* -------------------- تعديل سجل سلوك (مشرف الطلاب بلا قيد وقت + أدمن) -------------------- */
+async function handleUpdate(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, BEHAVIOR_MANAGE_ROLES_);
+  const { id } = req.body;
+  const d = validateBody(addBehaviorSchema, req.body);
+
+  if (user.role === 'role_student_sup' && user.branch !== d.branch) {
+    const err = new Error('غير مصرَّح لك بهذا الفرع');
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const { error } = await supabaseAdmin.from('student_behavior').update({
+    type: d.type, points: Math.round(d.points), description: d.description,
+  }).eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'تعديل سجل سلوك', details: { behaviorId: id, ...d }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
 /* -------------------- حذف سجل سلوك — أدمن فقط -------------------- */
 async function handleDelete(req, res) {
   const user = requireAuth(req);
@@ -75,5 +100,6 @@ async function handleDelete(req, res) {
 export default createRouter({
   listForStudent: handleListForStudent,
   add: handleAdd,
+  update: handleUpdate,
   delete: handleDelete,
 });
