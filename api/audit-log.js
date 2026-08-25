@@ -50,7 +50,7 @@ async function blockSenderForViolation(person, term, message) {
 /** 🆕 تنظيف كسول — يحذف أي رد (لا الرسالة الأصلية) قُرئ منذ أكثر من 24 ساعة، يُستدعى عند كل فتح لموضوع */
 async function cleanupExpiredReplies(threadId) {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  await supabaseAdmin.from('messages').delete().eq('thread_id', threadId).eq('is_original', false).not('read_at', 'is', null).lt('read_at', cutoff);
+  await supabaseAdmin.from('chat_messages').delete().eq('thread_id', threadId).eq('is_original', false).not('read_at', 'is', null).lt('read_at', cutoff);
 }
 
 /* ===================== إرسال رسالة جديدة (تبدأ موضوعاً جديداً) ===================== */
@@ -77,19 +77,19 @@ async function handleSendMessage(req, res) {
     throw e;
   }
 
-  const { data: thread, error: threadError } = await supabaseAdmin.from('message_threads').insert({
+  const { data: thread, error: threadError } = await supabaseAdmin.from('chat_threads').insert({
     subject: d.subject, context_type: d.contextType || 'general', context_id: d.contextId || null,
     sender_id: user.id, sender_type: 'employee', branch: user.branch,
   }).select('id').single();
   if (threadError) throw threadError;
 
-  const { error: msgError } = await supabaseAdmin.from('messages').insert({
+  const { error: msgError } = await supabaseAdmin.from('chat_messages').insert({
     thread_id: thread.id, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: true,
   });
   if (msgError) throw msgError;
 
   const recipientRows = d.recipients.map((r) => ({ thread_id: thread.id, recipient_id: r.id, recipient_type: r.type }));
-  const { error: recError } = await supabaseAdmin.from('message_recipients').insert(recipientRows);
+  const { error: recError } = await supabaseAdmin.from('chat_recipients').insert(recipientRows);
   if (recError) throw recError;
 
   return res.status(200).json({ success: true, data: { threadId: thread.id } });
@@ -98,11 +98,11 @@ async function handleSendMessage(req, res) {
 /* ===================== قائمة مواضيعي (مرسِل أو مستلم) ===================== */
 async function handleListMyThreads(req, res) {
   const user = requireAuth(req);
-  const { data: asRecipient } = await supabaseAdmin.from('message_recipients').select('thread_id').eq('recipient_id', user.id).eq('recipient_type', 'employee');
+  const { data: asRecipient } = await supabaseAdmin.from('chat_recipients').select('thread_id').eq('recipient_id', user.id).eq('recipient_type', 'employee');
   const recipientThreadIds = (asRecipient || []).map((r) => r.thread_id);
 
   const { data: threads, error } = await supabaseAdmin
-    .from('message_threads').select('*')
+    .from('chat_threads').select('*')
     .or(`sender_id.eq.${user.id},id.in.(${recipientThreadIds.length ? recipientThreadIds.join(',') : '0'})`)
     .order('created_at', { ascending: false });
   if (error) throw error;
@@ -116,14 +116,14 @@ async function handleGetThread(req, res) {
 
   await cleanupExpiredReplies(threadId);
 
-  const { data: messages, error } = await supabaseAdmin.from('messages').select('*').eq('thread_id', threadId).order('created_at', { ascending: true });
+  const { data: messages, error } = await supabaseAdmin.from('chat_messages').select('*').eq('thread_id', threadId).order('created_at', { ascending: true });
   if (error) throw error;
 
   const unreadIds = messages.filter((m) => !m.read_at && m.sender_id !== user.id).map((m) => m.id);
   if (unreadIds.length) {
-    await supabaseAdmin.from('messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
+    await supabaseAdmin.from('chat_messages').update({ read_at: new Date().toISOString() }).in('id', unreadIds);
   }
-  await supabaseAdmin.from('message_recipients').update({ read_at: new Date().toISOString() }).eq('thread_id', threadId).eq('recipient_id', user.id).is('read_at', null);
+  await supabaseAdmin.from('chat_recipients').update({ read_at: new Date().toISOString() }).eq('thread_id', threadId).eq('recipient_id', user.id).is('read_at', null);
 
   return res.status(200).json({ success: true, data: messages });
 }
@@ -146,7 +146,7 @@ async function handleReply(req, res) {
     throw e;
   }
 
-  const { error } = await supabaseAdmin.from('messages').insert({ thread_id: d.threadId, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: false });
+  const { error } = await supabaseAdmin.from('chat_messages').insert({ thread_id: d.threadId, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: false });
   if (error) throw error;
   return res.status(200).json({ success: true, data: true });
 }
@@ -200,7 +200,7 @@ async function handleUnblockSender(req, res) {
 /* ===================== عدد الرسائل غير المقروءة (للجرس) ===================== */
 async function handleUnreadCount(req, res) {
   const user = requireAuth(req);
-  const { count, error } = await supabaseAdmin.from('message_recipients').select('id', { count: 'exact', head: true }).eq('recipient_id', user.id).eq('recipient_type', 'employee').is('read_at', null);
+  const { count, error } = await supabaseAdmin.from('chat_recipients').select('id', { count: 'exact', head: true }).eq('recipient_id', user.id).eq('recipient_type', 'employee').is('read_at', null);
   if (error) throw error;
   return res.status(200).json({ success: true, data: { count: count || 0 } });
 }
