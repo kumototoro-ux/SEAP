@@ -25,7 +25,43 @@ import {
   saveTermSchema, addWeekSchema, updateWeekSchema, toggleTermVisibilitySchema,
   addHolidaySchema, updateHolidaySchema,
   classScheduleEntrySchema, examScheduleEntrySchema,
+  saveAssignmentSchema, saveAssignmentGradeSchema,
 } from '../lib/validation.js';
+
+/* -------------------- 🆕 صلاحيات التكاليف/المهام/الاختبارات/الإثراء -------------------- */
+// عرض: أدمن (بلا قيد) + معلم (تكاليفه هو فقط) + 3 أدوار إشراف (عرض فقط
+// بفرعهم/فروعهم). كتابة (إضافة/تعديل/حذف): أدمن + معلم فقط — الإشراف
+// عرض فقط ولا يصل إطلاقاً لإجراءات الكتابة أدناه.
+const ASSIGNMENT_VIEW_ROLES = ['role_admin', 'role_teacher', 'role_student_sup', 'role_teacher_sup', 'role_branch_monitor'];
+const ASSIGNMENT_WRITE_ROLES = ['role_admin', 'role_teacher'];
+const ASSIGNMENT_EDIT_WINDOW_MS = 60 * 60 * 1000;       // 🆕 ساعة واحدة من لحظة النشر
+const ASSIGNMENT_DELETE_WINDOW_MS = 30 * 60 * 1000;     // 🆕 نصف ساعة من لحظة النشر
+const GRADE_EDIT_WINDOW_MS = 6 * 60 * 60 * 1000;        // 🆕 6 ساعات من لحظة الرصد
+const GRADE_DELETE_WINDOW_MS = 30 * 60 * 1000;          // 🆕 نصف ساعة من لحظة الرصد
+
+/** 🆕 يتحقق أن المعلم مصرَّح له بالضبط بهذا (الفرع/الصف/الشعبة/المادة) —
+ * بحسب مصفوفة grades/sections/subject المخزَّنة بجلسته (JWT). الأدمن بلا قيد. */
+function assertTeacherScopeForAssignment_(user, d) {
+  if (user.role === 'role_admin') return;
+  const inScope = user.branch === d.branch
+    && (user.grades || []).includes(d.grade)
+    && (user.sections || []).includes(d.section)
+    && (user.subject || []).includes(d.subject);
+  if (!inScope) {
+    const e = new Error('لا تملك صلاحية النشر لهذا الفرع/الصف/الشعبة/المادة');
+    e.statusCode = 403;
+    throw e;
+  }
+}
+
+function assertWithinWindow_(sinceDate, windowMs, actionLabel) {
+  const elapsed = Date.now() - new Date(sinceDate).getTime();
+  if (elapsed > windowMs) {
+    const e = new Error(`انتهت مهلة ${actionLabel} المسموحة`);
+    e.statusCode = 403;
+    throw e;
+  }
+}
 
 /* -------------------- 🆕 صلاحيات الجداول الدراسية/الاختبارات (مشتركة) -------------------- */
 // ثلاثة أدوار فقط تملك صلاحية التعديل: الأدمن بلا قيد، مراقب الفروع
@@ -641,6 +677,273 @@ async function handleDeleteExamScheduleEntry(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/* -------------------- 🆕 التكاليف والمهام والاختبارات والإثراء -------------------- */
+
+async function handleListAssignments(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ASSIGNMENT_VIEW_ROLES);
+
+  let query = supabaseAdmin.from('assignments').select('*').order('published_at', { ascending: false });
+  if (user.role === 'role_branch_monitor') query = query.in('branch', user.allBranches || []);
+  else if (user.role === 'role_teacher_sup' || user.role === 'role_student_sup') query = query.eq('branch', user.branch);
+  else if (user.role === 'role_teacher') query = query.eq('teacher_id', user.id);
+
+  const { data: assignments, error } = await query;
+  if (error) throw error;
+
+  // 🆕 عدّاد الطلاب المتفاعلين (لبطاقات المشرفين) — نجلب الدرجات المرتبطة ونُجمِّعها بالجافاسكربت
+  const ids = (assignments || []).map((a) => a.id);
+  let counts = {};
+  if (ids.length) {
+    const { data: grades, error: gradesError } = await supabaseAdmin.from('assignment_grades').select('assignment_id').in('assignment_id', ids);
+    if (gradesError) throw gradesError;
+    (grades || []).forEach((g) => { counts[g.assignment_id] = (counts[g.assignment_id] || 0) + 1; });
+  }
+
+  const enriched = (assignments || []).map((a) => ({ ...a, participants_count: counts[a.id] || 0 }));
+  return res.status(200).json({ success: true, data: enriched });
+}
+
+async function handleListAssignmentQuestions(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ASSIGNMENT_VIEW_ROLES);
+  const { assignmentId } = validateBody(z.object({ assignmentId: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data, error } = await supabaseAdmin.from('assignment_questions').select('*').eq('assignment_id', assignmentId).order('question_order');
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleSaveAssignment(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ASSIGNMENT_WRITE_ROLES);
+  const d = validateBody(saveAssignmentSchema, req.body);
+
+  const questions = d.questions || [];
+  const maxScore = questions.reduce((sum, q) => sum + q.points, 0);
+
+  const row = {
+    category: d.category, subtype: d.category === 'enrichment' ? null : d.subtype,
+    title: d.title, description: d.description || null,
+    branch: d.branch, stage: d.stage, grade: d.grade, section: d.section, subject: d.subject,
+    available_from: d.availableFrom || null, due_at: d.dueAt || null,
+    youtube_url: d.youtubeUrl || null, attachment_url: d.attachmentUrl || null,
+    max_score: maxScore, updated_at: new Date().toISOString(),
+  };
+
+  let assignmentId = d.id;
+
+  if (assignmentId) {
+    // 🆕 تعديل: تحقّق ملكية + نافذة الساعة الواحدة (بلا قيد للأدمن)
+    const { data: existing, error: fetchError } = await supabaseAdmin.from('assignments').select('*').eq('id', assignmentId).single();
+    if (fetchError || !existing) {
+      const e = new Error('التكليف غير موجود');
+      e.statusCode = 404;
+      throw e;
+    }
+    if (user.role !== 'role_admin') {
+      if (existing.teacher_id !== user.id) {
+        const e = new Error('لا تملك صلاحية تعديل تكليف معلم آخر');
+        e.statusCode = 403;
+        throw e;
+      }
+      assertWithinWindow_(existing.published_at, ASSIGNMENT_EDIT_WINDOW_MS, 'تعديل التكليف');
+      assertTeacherScopeForAssignment_(user, d);
+    }
+
+    const { error: updateError } = await supabaseAdmin.from('assignments').update(row).eq('id', assignmentId);
+    if (updateError) throw updateError;
+
+    // 🆕 نعيد بناء الأسئلة بالكامل (حذف القديم + إدراج الجديد) — أبسط وأضمن من محاولة الدمج/الفرق
+    const { error: deleteQError } = await supabaseAdmin.from('assignment_questions').delete().eq('assignment_id', assignmentId);
+    if (deleteQError) throw deleteQError;
+  } else {
+    assertTeacherScopeForAssignment_(user, d);
+    row.teacher_id = user.id;
+    row.teacher_name = user.fullName;
+    row.published_at = new Date().toISOString();
+
+    const { data: inserted, error: insertError } = await supabaseAdmin.from('assignments').insert(row).select('id').single();
+    if (insertError) throw insertError;
+    assignmentId = inserted.id;
+  }
+
+  if (questions.length) {
+    const questionRows = questions.map((q, idx) => ({
+      assignment_id: assignmentId, question_order: idx + 1, question_text: q.questionText,
+      answer_type: q.answerType, points: q.points,
+      options: q.options || null, correct_option_id: q.correctOptionId || null,
+    }));
+    const { error: qInsertError } = await supabaseAdmin.from('assignment_questions').insert(questionRows);
+    if (qInsertError) throw qInsertError;
+  }
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: d.id ? 'تعديل تكليف/اختبار/إثراء' : 'نشر تكليف/اختبار/إثراء جديد',
+    details: { id: assignmentId, category: d.category, title: d.title, branch: d.branch, grade: d.grade, section: d.section },
+    branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: { id: assignmentId } });
+}
+
+async function handleDeleteAssignment(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ASSIGNMENT_WRITE_ROLES);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: existing, error: fetchError } = await supabaseAdmin.from('assignments').select('teacher_id, published_at').eq('id', id).single();
+  if (fetchError || !existing) {
+    const e = new Error('التكليف غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role !== 'role_admin') {
+    if (existing.teacher_id !== user.id) {
+      const e = new Error('لا تملك صلاحية حذف تكليف معلم آخر');
+      e.statusCode = 403;
+      throw e;
+    }
+    assertWithinWindow_(existing.published_at, ASSIGNMENT_DELETE_WINDOW_MS, 'حذف التكليف');
+  }
+
+  const { error } = await supabaseAdmin.from('assignments').delete().eq('id', id); // ON DELETE CASCADE يحذف الأسئلة والدرجات تلقائياً
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف تكليف/اختبار/إثراء', details: { id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- 🆕 رصد الدرجات (صفحة منفصلة — أدمن ومعلم فقط) -------------------- */
+
+/** 🆕 قائمة طلاب صف/شعبة التكليف مدمَجة بأي درجات مرصودة سابقاً — أساس صفحة الرصد */
+async function handleListAssignmentRoster(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const { assignmentId } = validateBody(z.object({ assignmentId: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: assignment, error: aError } = await supabaseAdmin.from('assignments').select('*').eq('id', assignmentId).single();
+  if (aError || !assignment) {
+    const e = new Error('التكليف غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role !== 'role_admin' && assignment.teacher_id !== user.id) {
+    const e = new Error('لا تملك صلاحية عرض رصد درجات تكليف معلم آخر');
+    e.statusCode = 403;
+    throw e;
+  }
+
+  const { data: students, error: sError } = await supabaseAdmin.from('students').select('id, name_ar')
+    .eq('branch', assignment.branch).eq('grade', assignment.grade).eq('section', assignment.section).is('deleted_at', null).order('name_ar');
+  if (sError) throw sError;
+
+  const { data: grades, error: gError } = await supabaseAdmin.from('assignment_grades').select('*').eq('assignment_id', assignmentId);
+  if (gError) throw gError;
+  const gradesByStudent = {};
+  (grades || []).forEach((g) => { gradesByStudent[g.student_id] = g; });
+
+  const roster = (students || []).map((s) => ({
+    student_id: s.id, student_name: s.name_ar, grade_row: gradesByStudent[s.id] || null,
+  }));
+
+  return res.status(200).json({ success: true, data: { assignment, roster } });
+}
+
+async function handleSaveAssignmentGrade(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const d = validateBody(saveAssignmentGradeSchema, req.body);
+
+  const { data: assignment, error: aError } = await supabaseAdmin.from('assignments').select('teacher_id, max_score').eq('id', d.assignmentId).single();
+  if (aError || !assignment) {
+    const e = new Error('التكليف غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role !== 'role_admin' && assignment.teacher_id !== user.id) {
+    const e = new Error('لا تملك صلاحية رصد درجات تكليف معلم آخر');
+    e.statusCode = 403;
+    throw e;
+  }
+  if (d.score !== null && d.score !== undefined && d.score > assignment.max_score) {
+    const e = new Error(`الدرجة لا يجب أن تتجاوز الدرجة الكلية للتكليف (${assignment.max_score})`);
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const { data: student, error: stError } = await supabaseAdmin.from('students').select('name_ar').eq('id', d.studentId).single();
+  if (stError || !student) {
+    const e = new Error('الطالب غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const { data: existingGrade } = await supabaseAdmin.from('assignment_grades').select('*')
+    .eq('assignment_id', d.assignmentId).eq('student_id', d.studentId).maybeSingle();
+
+  if (existingGrade && user.role !== 'role_admin') {
+    assertWithinWindow_(existingGrade.recorded_at, GRADE_EDIT_WINDOW_MS, 'تعديل الدرجة');
+  }
+
+  const row = {
+    assignment_id: d.assignmentId, student_id: d.studentId, student_name: student.name_ar,
+    score: d.score ?? null, max_score: assignment.max_score, participation_note: d.participationNote || null,
+    recorded_manually: true, graded_by: user.id, graded_by_name: user.fullName, updated_at: new Date().toISOString(),
+  };
+
+  if (existingGrade) {
+    const { error } = await supabaseAdmin.from('assignment_grades').update(row).eq('id', existingGrade.id);
+    if (error) throw error;
+  } else {
+    row.recorded_at = new Date().toISOString();
+    const { error } = await supabaseAdmin.from('assignment_grades').insert(row);
+    if (error) throw error;
+  }
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'رصد درجة تكليف', details: { assignmentId: d.assignmentId, studentId: d.studentId, score: d.score }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+async function handleDeleteAssignmentGrade(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const { assignmentId, studentId } = validateBody(z.object({
+    assignmentId: z.union([z.string(), z.number()]), studentId: z.string().min(1),
+  }), req.body);
+
+  const { data: existingGrade, error: fetchError } = await supabaseAdmin.from('assignment_grades').select('*, assignments!inner(teacher_id)')
+    .eq('assignment_id', assignmentId).eq('student_id', studentId).single();
+  if (fetchError || !existingGrade) {
+    const e = new Error('لا يوجد رصد درجة لهذا الطالب');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role !== 'role_admin') {
+    if (existingGrade.assignments.teacher_id !== user.id) {
+      const e = new Error('لا تملك صلاحية حذف رصد درجة تكليف معلم آخر');
+      e.statusCode = 403;
+      throw e;
+    }
+    assertWithinWindow_(existingGrade.recorded_at, GRADE_DELETE_WINDOW_MS, 'حذف الدرجة');
+  }
+
+  const { error } = await supabaseAdmin.from('assignment_grades').delete().eq('id', existingGrade.id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف رصد درجة تكليف', details: { assignmentId, studentId }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
 export default createRouter({
   listMatrix: handleListMatrix,
   addMatrixEntries: handleAddMatrixEntries,
@@ -668,4 +971,11 @@ export default createRouter({
   listExamSchedule: handleListExamSchedule,
   saveExamScheduleEntry: handleSaveExamScheduleEntry,
   deleteExamScheduleEntry: handleDeleteExamScheduleEntry,
+  listAssignments: handleListAssignments,
+  listAssignmentQuestions: handleListAssignmentQuestions,
+  saveAssignment: handleSaveAssignment,
+  deleteAssignment: handleDeleteAssignment,
+  listAssignmentRoster: handleListAssignmentRoster,
+  saveAssignmentGrade: handleSaveAssignmentGrade,
+  deleteAssignmentGrade: handleDeleteAssignmentGrade,
 });
