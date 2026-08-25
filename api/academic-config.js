@@ -23,7 +23,43 @@ import { z } from 'zod';
 import {
   validateBody, addMatrixEntriesSchema, saveGradeDistForSubjectSchema,
   saveTermSchema, addWeekSchema, updateWeekSchema, toggleTermVisibilitySchema,
+  addHolidaySchema, updateHolidaySchema,
 } from '../lib/validation.js';
+
+/* -------------------- 🆕 تحسينات أمان/تكامل بيانات مشتركة -------------------- */
+// (1) أي أسبوع أو إجازة يجب أن تقع تواريخه ضمن نطاق فصله الدراسي بالضبط —
+//     بلا هذا الفحص، يقدر الأدمن (بخطأ كتابي بحت) يُدخل تاريخاً خارج
+//     الفصل، وهذا يكسر أي منطق مستقبلي (تكاليف/درجات) يعتمد على "كل
+//     أيام الفصل مغطّاة بوضوح دراسي/إجازة/اختبار".
+// (2) حد أقصى معقول لطول أي مدخل واحد (180 يوماً) — حماية من خطأ كتابي
+//     بالتاريخ يُنتج مدى ضخماً غير منطقي (مثلاً سنة كاملة بدل أسبوع).
+
+async function fetchTermOrThrow_(termId) {
+  const { data: term, error } = await supabaseAdmin.from('academic_terms').select('*').eq('id', termId).single();
+  if (error || !term) {
+    const e = new Error('الفصل الدراسي المحدَّد غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  return term;
+}
+
+function assertDatesWithinTerm_(term, startDate, endDate) {
+  if (startDate < term.start_date || endDate > term.end_date) {
+    const e = new Error(`التواريخ يجب أن تقع ضمن نطاق الفصل الدراسي (${term.start_date} إلى ${term.end_date})`);
+    e.statusCode = 400;
+    throw e;
+  }
+}
+
+function assertReasonableSpan_(startDate, endDate, maxDays = 180) {
+  const days = (new Date(endDate) - new Date(startDate)) / 86400000;
+  if (days > maxDays) {
+    const e = new Error(`المدى الزمني طويل جداً (${Math.round(days)} يوم) — تحقّق من التواريخ المدخَلة`);
+    e.statusCode = 400;
+    throw e;
+  }
+}
 
 /* -------------------- مصفوفة توزيع المواد -------------------- */
 async function handleListMatrix(req, res) {
@@ -169,10 +205,12 @@ async function handleDeleteTerm(req, res) {
   requireRole(user, ['role_admin']);
   const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
 
-  // 🆕 نحذف الأسابيع يدوياً أولاً بدل الاعتماد فقط على ON DELETE CASCADE —
-  // احتياط لو القيد غير مفعَّل فعلياً بقاعدة البيانات الحية
+  // 🆕 نحذف الأسابيع والإجازات يدوياً أولاً بدل الاعتماد فقط على ON DELETE
+  // CASCADE — احتياط لو القيد غير مفعَّل فعلياً بقاعدة البيانات الحية
   const { error: deleteWeeksError } = await supabaseAdmin.from('academic_weeks').delete().eq('term_id', id);
   if (deleteWeeksError) throw deleteWeeksError;
+  const { error: deleteHolidaysError } = await supabaseAdmin.from('academic_holidays').delete().eq('term_id', id);
+  if (deleteHolidaysError) throw deleteHolidaysError;
 
   const { error: deleteTermError } = await supabaseAdmin.from('academic_terms').delete().eq('id', id);
   if (deleteTermError) throw deleteTermError;
@@ -216,6 +254,10 @@ async function handleAddWeek(req, res) {
   requireRole(user, ['role_admin']);
   const d = validateBody(addWeekSchema, req.body);
 
+  const term = await fetchTermOrThrow_(d.termId); // 🆕 يتأكد أن الفصل موجود فعلاً
+  assertDatesWithinTerm_(term, d.startDate, d.endDate); // 🆕 تكامل بيانات: التواريخ ضمن نطاق الفصل
+  assertReasonableSpan_(d.startDate, d.endDate); // 🆕 حماية من خطأ كتابي بمدى ضخم
+
   const { data: inserted, error } = await supabaseAdmin.from('academic_weeks').insert({
     term_id: d.termId, week_number: d.weekNumber, label: d.label,
     week_type: d.weekType, start_date: d.startDate, end_date: d.endDate,
@@ -233,6 +275,17 @@ async function handleUpdateWeek(req, res) {
   const user = requireAuth(req);
   requireRole(user, ['role_admin']);
   const d = validateBody(updateWeekSchema, req.body);
+
+  // 🆕 نحتاج نعرف فصل الأسبوع الحالي عشان نتحقق من نطاق التواريخ
+  const { data: existingWeek, error: fetchError } = await supabaseAdmin.from('academic_weeks').select('term_id').eq('id', d.id).single();
+  if (fetchError || !existingWeek) {
+    const e = new Error('الأسبوع الدراسي غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  const term = await fetchTermOrThrow_(existingWeek.term_id);
+  assertDatesWithinTerm_(term, d.startDate, d.endDate);
+  assertReasonableSpan_(d.startDate, d.endDate);
 
   const { error } = await supabaseAdmin.from('academic_weeks').update({
     week_number: d.weekNumber, label: d.label, week_type: d.weekType,
@@ -262,6 +315,83 @@ async function handleDeleteWeek(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/* -------------------- 🆕 التقويم الدراسي: إدارة الإجازات يدوياً (أدمن فقط) -------------------- */
+// مستقلة عن الأسابيع عن قصد — إجازة قد تقع داخل أسبوع دراسي واحد أو
+// تمتد لتغطي أكثر من أسبوع (يوم، يومين، 3، 8، حتى 11 يوماً أو أكثر).
+// تُدار من نفس شاشة "إدارة الأسابيع" لكل فصل بالإعدادات.
+
+async function handleListHolidaysForTerm(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const { termId } = validateBody(z.object({ termId: z.union([z.string(), z.number()]) }), req.body);
+  const { data, error } = await supabaseAdmin.from('academic_holidays').select('*').eq('term_id', termId).order('start_date', { ascending: true });
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleAddHoliday(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const d = validateBody(addHolidaySchema, req.body);
+
+  const term = await fetchTermOrThrow_(d.termId);
+  assertDatesWithinTerm_(term, d.startDate, d.endDate);
+  assertReasonableSpan_(d.startDate, d.endDate);
+
+  const { data: inserted, error } = await supabaseAdmin.from('academic_holidays').insert({
+    term_id: d.termId, label: d.label, start_date: d.startDate, end_date: d.endDate,
+  }).select('id').single();
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'إضافة إجازة', details: { id: inserted.id, termId: d.termId, label: d.label }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: { id: inserted.id } });
+}
+
+async function handleUpdateHoliday(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const d = validateBody(updateHolidaySchema, req.body);
+
+  const { data: existingHoliday, error: fetchError } = await supabaseAdmin.from('academic_holidays').select('term_id').eq('id', d.id).single();
+  if (fetchError || !existingHoliday) {
+    const e = new Error('الإجازة غير موجودة');
+    e.statusCode = 404;
+    throw e;
+  }
+  const term = await fetchTermOrThrow_(existingHoliday.term_id);
+  assertDatesWithinTerm_(term, d.startDate, d.endDate);
+  assertReasonableSpan_(d.startDate, d.endDate);
+
+  const { error } = await supabaseAdmin.from('academic_holidays').update({
+    label: d.label, start_date: d.startDate, end_date: d.endDate,
+  }).eq('id', d.id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'تعديل إجازة', details: { id: d.id, label: d.label }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+async function handleDeleteHoliday(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { error } = await supabaseAdmin.from('academic_holidays').delete().eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف إجازة', details: { id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
 /* -------------------- 🆕 التقويم الدراسي: نقطة العرض العامة (كل الأدوار، بلا استثناء) -------------------- */
 
 /** يُرجِع فقط الفصول الظاهرة (is_visible = true) وأسابيعها — لكل مستخدم
@@ -277,14 +407,20 @@ async function handleListCalendarData(req, res) {
 
   const visibleTermIds = (terms || []).map((t) => t.id);
   let weeks = [];
+  let holidays = []; // 🆕
   if (visibleTermIds.length) {
     const { data: weeksData, error: weeksError } = await supabaseAdmin
       .from('academic_weeks').select('*').in('term_id', visibleTermIds).order('week_number', { ascending: true });
     if (weeksError) throw weeksError;
     weeks = weeksData || [];
+
+    const { data: holidaysData, error: holidaysError } = await supabaseAdmin
+      .from('academic_holidays').select('*').in('term_id', visibleTermIds).order('start_date', { ascending: true });
+    if (holidaysError) throw holidaysError;
+    holidays = holidaysData || [];
   }
 
-  return res.status(200).json({ success: true, data: { terms: terms || [], weeks } });
+  return res.status(200).json({ success: true, data: { terms: terms || [], weeks, holidays } });
 }
 
 export default createRouter({
@@ -302,5 +438,9 @@ export default createRouter({
   addWeek: handleAddWeek,
   updateWeek: handleUpdateWeek,
   deleteWeek: handleDeleteWeek,
+  listHolidaysForTerm: handleListHolidaysForTerm,
+  addHoliday: handleAddHoliday,
+  updateHoliday: handleUpdateHoliday,
+  deleteHoliday: handleDeleteHoliday,
   listCalendarData: handleListCalendarData,
 });
