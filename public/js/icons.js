@@ -33,4 +33,6 @@ const ICONS = {
   calendar: () => icon('<rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9.5h18"/><path d="M8 2.5v4"/><path d="M16 2.5v4"/>'),
   // 🆕 أيقونة الجداول الدراسية — صفحة جديدة
   schedule: () => icon('<rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M3 8.5h18"/><path d="M9 8.5v12"/><path d="M15 8.5v12"/>'),
+  // 🆕 أيقونة التكاليف والمهام — صفحة جديدة
+  clipboard: () => icon('<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M9 11h6"/><path d="M9 15h6"/><path d="M9 19h3"/>'),
 };
