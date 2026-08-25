@@ -1552,6 +1552,7 @@ const SETTINGS_SECTIONS = [
   { key: 'evaluation', label: 'التقييم والاختبارات', icon: 'tasks', lists: ['terms', 'continuousEvalTypes', 'exams'] },
   { key: 'subjectMatrix', label: 'توزيع المواد', icon: 'employees' },
   { key: 'gradeDistribution', label: 'توزيع الدرجات', icon: 'guardians' },
+  { key: 'academicCalendar', label: 'التقويم الدراسي', icon: 'calendar' }, // 🆕
 ];
 
 let siteSettingsListsState = {};
@@ -1579,7 +1580,11 @@ async function renderSiteSettingsView() {
     </div>`;
 
   document.querySelectorAll('.settings-nav-item').forEach((btn) => {
-    btn.addEventListener('click', () => { siteSettingsActiveSection = btn.getAttribute('data-section'); renderSettingsSection(); });
+    btn.addEventListener('click', () => {
+      siteSettingsActiveSection = btn.getAttribute('data-section');
+      if (siteSettingsActiveSection !== 'academicCalendar') academicCalendarActiveTermId = null; // 🆕 يصفّر حالة إدارة الأسابيع عند مغادرة القسم
+      renderSettingsSection();
+    });
   });
 
   renderSettingsSection();
@@ -1593,6 +1598,7 @@ async function renderSettingsSection() {
   if (section.key === 'general') { renderSettingsGeneralSection(content); return; }
   if (section.key === 'subjectMatrix') { await renderSettingsSubjectMatrixSection(content); return; }
   if (section.key === 'gradeDistribution') { await renderSettingsGradeDistSection(content); return; }
+  if (section.key === 'academicCalendar') { await renderSettingsAcademicCalendarSection(content); return; } // 🆕
 
   // 🆕 أقسام "قوائم قابلة للتعديل" (الهيكل الأكاديمي، الحسابات، الحضور، التقييم) — نفس النمط الموحَّد للأربعة
   content.innerHTML = `<h2 style="margin-top:0">${escapeHtml(section.label)}</h2>` + section.lists.map((camel) => {
@@ -3357,155 +3363,248 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-/* ===================== 🆕 صفحة التقويم الدراسي ===================== */
-// فصلان دراسيان (أول/ثاني) لكل عام دراسي، كل فصل مقسَّم لأسابيع تُولَّد
-// تلقائياً من تواريخ البداية/النهاية. الأدمن فقط يضيف/يعدّل/يحذف —
-// باقي الأدوار عرض فقط (حسب خارطة الصلاحيات الموثَّقة أعلى الملف).
-// هذي الصفحة أساس بنائي لصفحات قادمة (الحصص، التكاليف، الدرجات).
+/* ===================== 🆕 صفحة التقويم الدراسي (عرض فقط للجميع) ===================== */
+// تصميم شبكة تقويم شهري احترافي — بلا أي أدوات إدارة إطلاقاً (لا للأدمن
+// ولا لغيره). الإدارة الكاملة (فصول + أسابيع + إظهار/إخفاء) تعيش حصراً
+// داخل "الإعدادات ← التقويم الدراسي" (أدمن فقط، محمي أصلاً عبر ROLE_PAGES).
+
+const WEEK_TYPE_META = {
+  'دراسي':        { badgeClass: 'week-type-study' },
+  'إجازة':         { badgeClass: 'week-type-holiday' },
+  'اختبار شهري':  { badgeClass: 'week-type-monthly' },
+  'اختبار نهائي': { badgeClass: 'week-type-final' },
+};
+
+/** يحوّل Date لنص YYYY-MM-DD بالتوقيت المحلي (بلا أي تحويل UTC قد يزحزح اليوم) */
+function toISODateLocal(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** يحوّل نص YYYY-MM-DD لكائن Date بالتوقيت المحلي (بلا فخ تفسير UTC لنصوص ISO) */
+function parseISODateLocal(str) {
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+let calendarViewDate = new Date(); // 🆕 الشهر المعروض حالياً بالتقويم — يبدأ بالشهر الحالي
 
 async function renderAcademicCalendarView() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>`;
-  const isAdmin = APP.user.role === 'role_admin';
 
+  let calData;
   try {
-    APP.allAcademicTerms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+    calData = await apiCall('academic-config', { method: 'POST', body: { action: 'listCalendarData' } });
   } catch (e) {
     main.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`;
     return;
   }
 
-  main.innerHTML = `
-    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
-      <div>
-        <h2 style="margin:0">التقويم الدراسي</h2>
-        <p style="color:#888;font-size:12.5px;margin:4px 0 0">الفصول الدراسية والأسابيع — الأساس لكل صفحات الدرجات والتكاليف القادمة</p>
-      </div>
-      ${isAdmin ? `<button type="button" id="addTermBtn">${ICONS.plus()} فصل دراسي جديد</button>` : ''}
-    </div>
-    <div id="termFormCard" style="display:none"></div>
-    <div id="termsListArea"></div>`;
+  APP.calendarTerms = calData.terms || [];
+  APP.calendarWeeks = calData.weeks || [];
 
-  if (isAdmin) {
-    document.getElementById('addTermBtn').addEventListener('click', () => openTermForm());
-  }
-  renderTermsList();
+  main.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <div>
+          <h2 style="margin:0">التقويم الدراسي</h2>
+          <p id="calendarVisibleTermsNote" style="color:#888;font-size:12px;margin:4px 0 0"></p>
+        </div>
+      </div>
+      <div class="calendar-toolbar">
+        <div class="calendar-toolbar-nav">
+          <button type="button" class="calendar-nav-btn" id="calPrevBtn" title="الشهر السابق">${ICONS.chevronDown()}</button>
+          <span id="calMonthLabel" class="calendar-month-label"></span>
+          <button type="button" class="calendar-nav-btn" id="calNextBtn" title="الشهر التالي">${ICONS.chevronDown()}</button>
+        </div>
+        <button type="button" id="calTodayBtn" class="btn-outline-sm">اليوم</button>
+      </div>
+      <div id="calendarGridArea"></div>
+      <div class="calendar-legend">
+        ${Object.entries(WEEK_TYPE_META).map(([type, meta]) => `<span class="calendar-legend-item"><span class="calendar-legend-dot ${meta.badgeClass}"></span>${escapeHtml(type)}</span>`).join('')}
+      </div>
+    </div>`;
+
+  document.getElementById('calPrevBtn').style.transform = 'rotate(90deg)';
+  document.getElementById('calNextBtn').style.transform = 'rotate(-90deg)';
+
+  const visibleNames = APP.calendarTerms.map((t) => t.name).join('، ');
+  document.getElementById('calendarVisibleTermsNote').textContent = visibleNames
+    ? `الفصول الظاهرة حالياً: ${visibleNames}`
+    : 'لا يوجد فصل دراسي ظاهر حالياً — راجع الإدارة';
+
+  document.getElementById('calPrevBtn').addEventListener('click', () => navigateCalendarMonth(-1));
+  document.getElementById('calNextBtn').addEventListener('click', () => navigateCalendarMonth(1));
+  document.getElementById('calTodayBtn').addEventListener('click', () => { calendarViewDate = new Date(); renderCalendarGrid(); });
+
+  renderCalendarGrid();
 }
 
-function renderTermsList() {
-  const area = document.getElementById('termsListArea');
-  const isAdmin = APP.user.role === 'role_admin';
-  const terms = APP.allAcademicTerms || [];
+function navigateCalendarMonth(delta) {
+  calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + delta, 1);
+  renderCalendarGrid();
+}
 
-  if (!terms.length) {
-    area.innerHTML = `<div class="card"><p style="color:#888">لا توجد فصول دراسية مضافة بعد${isAdmin ? ' — أضف الفصل الأول من الزر أعلاه' : ''}</p></div>`;
-    return;
+function renderCalendarGrid() {
+  const area = document.getElementById('calendarGridArea');
+  if (!area) return;
+
+  const year = calendarViewDate.getFullYear();
+  const monthIndex = calendarViewDate.getMonth();
+  document.getElementById('calMonthLabel').textContent = calendarViewDate.toLocaleDateString('ar-SA-u-ca-gregory', { month: 'long', year: 'numeric' });
+
+  // 🆕 خارطة تاريخ → بيانات الأسبوع (لعرض سريع O(1) لكل يوم بالشبكة)
+  const dateMap = {};
+  const termsById = {};
+  APP.calendarTerms.forEach((t) => { termsById[t.id] = t; });
+  APP.calendarWeeks.forEach((w) => {
+    let cursor = parseISODateLocal(w.start_date);
+    const end = parseISODateLocal(w.end_date);
+    while (cursor <= end) {
+      dateMap[toISODateLocal(cursor)] = { ...w, termName: termsById[w.term_id]?.name || '' };
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  });
+
+  const firstOfMonth = new Date(year, monthIndex, 1);
+  const startWeekday = firstOfMonth.getDay(); // 0=الأحد
+  const daysInThisMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const totalCells = Math.ceil((startWeekday + daysInThisMonth) / 7) * 7;
+  const todayStr = toISODateLocal(new Date());
+  const dayHeaders = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+
+  let cellsHtml = '';
+  for (let i = 0; i < totalCells; i++) {
+    const cellDate = new Date(year, monthIndex, 1 - startWeekday + i);
+    const dateStr = toISODateLocal(cellDate);
+    const isCurrentMonth = cellDate.getMonth() === monthIndex;
+    const weekInfo = dateMap[dateStr];
+    const isToday = dateStr === todayStr;
+    cellsHtml += `
+      <div class="calendar-cell ${isCurrentMonth ? '' : 'calendar-cell-outside'} ${isToday ? 'calendar-cell-today' : ''}" ${weekInfo ? `data-cal-day="${dateStr}"` : ''}>
+        <span class="calendar-cell-daynum">${cellDate.getDate()}</span>
+        ${weekInfo ? `<span class="calendar-event-chip ${WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study'}">${escapeHtml(weekInfo.label || weekInfo.week_type)}</span>` : ''}
+      </div>`;
   }
 
-  // ترتيب: العام الدراسي الأحدث أولاً، ثم رقم الفصل تصاعدياً
+  area.innerHTML = `
+    <div class="calendar-grid">
+      ${dayHeaders.map((d) => `<div class="calendar-day-header">${d}</div>`).join('')}
+      ${cellsHtml}
+    </div>`;
+
+  area.querySelectorAll('[data-cal-day]').forEach((cell) => {
+    cell.addEventListener('click', () => {
+      const info = dateMap[cell.getAttribute('data-cal-day')];
+      if (!info) return;
+      showDetailModal(`الأسبوع ${info.week_number} — ${info.week_type}`, info.termName, [
+        { label: 'التسمية', value: info.label },
+        { label: 'النوع', value: info.week_type },
+        { label: 'من', value: formatDateAr(info.start_date) },
+        { label: 'إلى', value: formatDateAr(info.end_date) },
+      ]);
+    });
+  });
+}
+
+function formatDateAr(dateStr) {
+  if (!dateStr) return '—';
+  try {
+    return parseISODateLocal(dateStr).toLocaleDateString('ar-SA-u-ca-gregory', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch (e) { return dateStr; }
+}
+
+/* ===================== 🆕 إدارة التقويم الدراسي (داخل الإعدادات — أدمن فقط) ===================== */
+// نفس فلسفة بقية أقسام الإعدادات: لا توليد تلقائي لأي شيء — الأدمن يضيف
+// كل فصل وكل أسبوع بنفسه يدوياً (تواريخ، نوع، تسمية)، ويتحكّم بإظهار كل
+// فصل لكل الموظفين بشكل مستقل عن الآخر.
+
+let academicCalendarActiveTermId = null; // null = عرض قائمة الفصول، وإلا = إدارة أسابيع هذا الفصل
+
+async function renderSettingsAcademicCalendarSection(content) {
+  if (academicCalendarActiveTermId) {
+    await renderAcademicWeeksManagerSection(content);
+  } else {
+    await renderAcademicTermsManagerSection(content);
+  }
+}
+
+async function renderAcademicTermsManagerSection(content) {
+  content.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let terms;
+  try {
+    terms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+  } catch (e) {
+    content.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  APP.allAcademicTermsSettings = terms;
+
+  content.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0">التقويم الدراسي</h2>
+        <p style="color:#888;font-size:12.5px;margin:4px 0 0">أضف الفصول الدراسية، ثم أدر أسابيع كل فصل يدوياً بنفسك — بلا أي توليد تلقائي</p>
+      </div>
+      <button type="button" id="addTermSettingsBtn">${ICONS.plus()} فصل دراسي جديد</button>
+    </div>
+    <div id="termSettingsFormCard" style="display:none;margin-bottom:16px"></div>
+    <div id="termSettingsListArea"></div>`;
+
+  document.getElementById('addTermSettingsBtn').addEventListener('click', () => openTermSettingsForm());
+  renderTermSettingsList();
+}
+
+function renderTermSettingsList() {
+  const area = document.getElementById('termSettingsListArea');
+  const terms = APP.allAcademicTermsSettings || [];
+
+  if (!terms.length) { area.innerHTML = '<p style="color:#888">لا توجد فصول دراسية مضافة بعد — أضف الفصل الأول من الزر أعلاه</p>'; return; }
+
   const sorted = [...terms].sort((a, b) =>
     (b.academic_year || '').localeCompare(a.academic_year || '') || (a.term_number || 0) - (b.term_number || 0));
 
   area.innerHTML = sorted.map((t) => `
-    <div class="card" style="margin-bottom:14px">
+    <div class="card ${t.is_visible === false ? 'term-card-hidden' : ''}" style="margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
         <div>
-          <div style="font-weight:800;font-size:15px">${escapeHtml(t.name)} <span style="font-weight:600;font-size:12px;color:#888">— الفصل ${t.term_number === 1 ? 'الأول' : 'الثاني'} — ${escapeHtml(t.academic_year)}</span></div>
+          <div style="font-weight:800;font-size:14.5px">${escapeHtml(t.name)} <span style="font-weight:600;font-size:12px;color:#888">— الفصل ${t.term_number === 1 ? 'الأول' : 'الثاني'} — ${escapeHtml(t.academic_year)}</span></div>
           <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${formatDateAr(t.start_date)} ← ${formatDateAr(t.end_date)}</div>
         </div>
-        ${isAdmin ? `
-          <div style="display:flex;gap:4px">
-            <button type="button" class="btn-icon-edit" data-edit-term="${t.id}" title="تعديل">${ICONS.edit()}</button>
-            <button type="button" class="btn-icon-delete" data-delete-term="${t.id}" title="حذف">${ICONS.trash()}</button>
-          </div>` : ''}
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button type="button" class="term-visibility-toggle ${t.is_visible === false ? 'is-hidden' : 'is-visible'}" data-toggle-visibility="${t.id}" data-current-visible="${t.is_visible !== false}">
+            ${t.is_visible === false ? 'مخفي عن الجميع' : 'ظاهر للجميع'}
+          </button>
+          <button type="button" class="btn-icon-edit" data-edit-term="${t.id}" title="تعديل">${ICONS.edit()}</button>
+          <button type="button" class="btn-icon-delete" data-delete-term="${t.id}" title="حذف">${ICONS.trash()}</button>
+        </div>
       </div>
-      <button type="button" data-toggle-weeks="${t.id}" style="margin-top:12px;background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;display:flex;align-items:center;gap:4px">${ICONS.chevronDown()} عرض الأسابيع</button>
-      <div id="weeksArea_${t.id}" style="display:none;margin-top:10px"></div>
+      <button type="button" class="btn-outline-sm" data-manage-weeks="${t.id}" style="margin-top:12px">${ICONS.calendar()} إدارة الأسابيع</button>
     </div>`).join('');
 
-  area.querySelectorAll('[data-toggle-weeks]').forEach((btn) => {
-    btn.addEventListener('click', () => toggleTermWeeks(btn.getAttribute('data-toggle-weeks'), btn));
+  area.querySelectorAll('[data-manage-weeks]').forEach((btn) => {
+    btn.addEventListener('click', () => { academicCalendarActiveTermId = btn.getAttribute('data-manage-weeks'); renderSettingsSection(); });
   });
-  if (isAdmin) {
-    area.querySelectorAll('[data-edit-term]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const term = terms.find((t) => String(t.id) === btn.getAttribute('data-edit-term'));
-        if (term) openTermForm(term);
-      });
+  area.querySelectorAll('[data-edit-term]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const term = terms.find((t) => String(t.id) === btn.getAttribute('data-edit-term'));
+      if (term) openTermSettingsForm(term);
     });
-    area.querySelectorAll('[data-delete-term]').forEach((btn) => {
-      btn.addEventListener('click', () => deleteTermConfirm(btn.getAttribute('data-delete-term')));
-    });
-  }
+  });
+  area.querySelectorAll('[data-delete-term]').forEach((btn) => {
+    btn.addEventListener('click', () => deleteTermSettingsConfirm(btn.getAttribute('data-delete-term')));
+  });
+  area.querySelectorAll('[data-toggle-visibility]').forEach((btn) => {
+    btn.addEventListener('click', () => toggleTermVisibilitySettings(btn.getAttribute('data-toggle-visibility'), btn.getAttribute('data-current-visible') === 'true'));
+  });
 }
 
-async function toggleTermWeeks(termId, btnEl) {
-  const area = document.getElementById(`weeksArea_${termId}`);
-  const isOpen = area.style.display !== 'none';
-  if (isOpen) {
-    area.style.display = 'none';
-    btnEl.innerHTML = `${ICONS.chevronDown()} عرض الأسابيع`;
-    return;
-  }
-  area.style.display = 'block';
-  btnEl.innerHTML = `${ICONS.chevronDown()} إخفاء الأسابيع`;
-  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
-  try {
-    const weeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId } });
-    renderWeeksTable(termId, weeks);
-  } catch (e) {
-    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
-  }
-}
-
-function renderWeeksTable(termId, weeks) {
-  const area = document.getElementById(`weeksArea_${termId}`);
-  const isAdmin = APP.user.role === 'role_admin';
-  if (!weeks.length) { area.innerHTML = '<p style="color:#888;font-size:12.5px">لا توجد أسابيع (تحقّق من تواريخ الفصل)</p>'; return; }
-
-  area.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:6px">
-      ${weeks.map((w) => `
-        <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
-          <div>
-            <span style="font-weight:700;font-size:12.5px">الأسبوع ${w.week_number}</span>
-            <span style="font-size:12px;color:var(--text-muted);margin-inline-start:8px" data-week-label="${w.id}">${escapeHtml(w.label || '')}</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <span style="font-size:11.5px;color:var(--text-muted)">${formatDateAr(w.start_date)} ← ${formatDateAr(w.end_date)}</span>
-            ${isAdmin ? `<button type="button" class="btn-icon-edit" data-rename-week="${w.id}" title="إعادة تسمية">${ICONS.edit()}</button>` : ''}
-          </div>
-        </div>`).join('')}
-    </div>`;
-
-  if (isAdmin) {
-    area.querySelectorAll('[data-rename-week]').forEach((btn) => {
-      btn.addEventListener('click', () => renameWeekPrompt(btn.getAttribute('data-rename-week'), termId));
-    });
-  }
-}
-
-async function renameWeekPrompt(weekId, termId) {
-  const labelSpan = document.querySelector(`[data-week-label="${weekId}"]`);
-  const currentLabel = labelSpan ? labelSpan.textContent : '';
-  const newLabel = prompt('اسم الأسبوع الجديد:', currentLabel);
-  if (newLabel === null) return; // 🆕 المستخدم ألغى — لا نرسل شيء
-  if (!newLabel.trim()) { showToast('الاسم لا يجب أن يكون فارغاً', 'error'); return; }
-  try {
-    await apiCall('academic-config', { method: 'POST', body: { action: 'renameWeek', id: weekId, label: newLabel.trim() } });
-    showToast('تم تحديث اسم الأسبوع', 'success');
-    const weeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId } });
-    renderWeeksTable(termId, weeks);
-  } catch (e) { showToast(e.message, 'error'); }
-}
-
-function openTermForm(term = null) {
-  const card = document.getElementById('termFormCard');
+function openTermSettingsForm(term = null) {
+  const card = document.getElementById('termSettingsFormCard');
   card.style.display = 'block';
   card.className = 'card';
   card.innerHTML = `
     <h3 style="margin-top:0">${term ? 'تعديل فصل دراسي' : 'إضافة فصل دراسي جديد'}</h3>
-    ${term ? `<p style="color:#c47a00;font-size:12px;background:#fff6e5;padding:8px 10px;border-radius:8px">⚠️ تعديل تواريخ الفصل يعيد توليد كل أسابيعه تلقائياً — أي تسميات مخصَّصة للأسابيع الحالية ستُفقَد</p>` : ''}
     <div class="field"><label>اسم الفصل</label><input type="text" id="term_name" value="${term ? escapeHtml(term.name) : ''}" placeholder="مثال: الفصل الدراسي الأول"></div>
     <div class="field"><label>رقم الفصل</label>
       <select id="term_number">
@@ -3517,16 +3616,16 @@ function openTermForm(term = null) {
     <div class="field"><label>تاريخ البداية</label><input type="date" id="term_start" value="${term ? term.start_date : ''}"></div>
     <div class="field"><label>تاريخ النهاية</label><input type="date" id="term_end" value="${term ? term.end_date : ''}"></div>
     <div style="display:flex;gap:10px;margin-top:14px">
-      <button type="button" id="saveTermBtn">${term ? 'حفظ التعديلات' : 'إضافة الفصل'}</button>
-      <button type="button" id="cancelTermBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
+      <button type="button" id="saveTermSettingsBtn">${term ? 'حفظ التعديلات' : 'إضافة الفصل'}</button>
+      <button type="button" id="cancelTermSettingsBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
     </div>`;
 
-  document.getElementById('cancelTermBtn').addEventListener('click', () => { card.style.display = 'none'; card.innerHTML = ''; });
-  document.getElementById('saveTermBtn').addEventListener('click', () => saveTermSubmit(term ? term.id : null));
+  document.getElementById('cancelTermSettingsBtn').addEventListener('click', () => { card.style.display = 'none'; card.innerHTML = ''; });
+  document.getElementById('saveTermSettingsBtn').addEventListener('click', () => saveTermSettingsSubmit(term ? term.id : null));
   card.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
-async function saveTermSubmit(existingId) {
+async function saveTermSettingsSubmit(existingId) {
   const name = document.getElementById('term_name').value.trim();
   const termNumber = Number(document.getElementById('term_number').value);
   const academicYear = document.getElementById('term_year').value.trim();
@@ -3536,38 +3635,178 @@ async function saveTermSubmit(existingId) {
   if (!name || !academicYear || !startDate || !endDate) { showToast('أكمل كل الحقول', 'error'); return; }
   if (endDate < startDate) { showToast('تاريخ النهاية يجب أن يكون بعد تاريخ البداية', 'error'); return; }
 
-  const btn = document.getElementById('saveTermBtn');
+  const btn = document.getElementById('saveTermSettingsBtn');
   btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
   try {
     const body = { action: 'saveTerm', name, termNumber, academicYear, startDate, endDate };
     if (existingId) body.id = existingId;
     await apiCall('academic-config', { method: 'POST', body });
-    showToast('تم حفظ الفصل الدراسي وتوليد الأسابيع بنجاح', 'success');
-    document.getElementById('termFormCard').style.display = 'none';
-    document.getElementById('termFormCard').innerHTML = '';
-    APP.allAcademicTerms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
-    renderTermsList();
+    showToast('تم حفظ الفصل الدراسي بنجاح', 'success');
+    document.getElementById('termSettingsFormCard').style.display = 'none';
+    document.getElementById('termSettingsFormCard').innerHTML = '';
+    APP.allAcademicTermsSettings = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+    renderTermSettingsList();
   } catch (e) { showToast(e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = existingId ? 'حفظ التعديلات' : 'إضافة الفصل'; }
 }
 
-function deleteTermConfirm(termId) {
-  if (!confirm('حذف هذا الفصل الدراسي سيحذف كل أسابيعه المرتبطة به نهائياً. هل أنت متأكد؟')) return;
+function deleteTermSettingsConfirm(termId) {
+  if (!confirm('حذف هذا الفصل الدراسي سيحذف كل أسابيعه المُضافة يدوياً نهائياً. هل أنت متأكد؟')) return;
   (async () => {
     try {
       await apiCall('academic-config', { method: 'POST', body: { action: 'deleteTerm', id: termId } });
       showToast('تم حذف الفصل الدراسي', 'success');
-      APP.allAcademicTerms = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
-      renderTermsList();
+      APP.allAcademicTermsSettings = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+      renderTermSettingsList();
     } catch (e) { showToast(e.message, 'error'); }
   })();
 }
 
-function formatDateAr(dateStr) {
-  if (!dateStr) return '—';
+async function toggleTermVisibilitySettings(termId, currentlyVisible) {
   try {
-    return new Date(dateStr).toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' });
-  } catch (e) { return dateStr; }
+    await apiCall('academic-config', { method: 'POST', body: { action: 'toggleTermVisibility', id: termId, isVisible: !currentlyVisible } });
+    showToast(currentlyVisible ? 'تم إخفاء الفصل عن كل الموظفين' : 'تم إظهار الفصل لكل الموظفين', 'success');
+    APP.allAcademicTermsSettings = await apiCall('academic-config', { method: 'POST', body: { action: 'listTerms' } });
+    renderTermSettingsList();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+/* -------------------- إدارة أسابيع فصل معيّن (يدوياً بالكامل) -------------------- */
+
+async function renderAcademicWeeksManagerSection(content) {
+  const term = (APP.allAcademicTermsSettings || []).find((t) => String(t.id) === String(academicCalendarActiveTermId));
+  content.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+
+  let weeks;
+  try {
+    weeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId: academicCalendarActiveTermId } });
+  } catch (e) {
+    content.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
+    return;
+  }
+  APP.currentTermWeeks = weeks;
+
+  content.innerHTML = `
+    <button type="button" id="backToTermsBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;margin-bottom:14px;display:flex;align-items:center;gap:4px">→ رجوع لقائمة الفصول</button>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <div>
+        <h2 style="margin:0">أسابيع: ${term ? escapeHtml(term.name) : ''}</h2>
+        <p style="color:#888;font-size:12.5px;margin:4px 0 0">${term ? `${formatDateAr(term.start_date)} ← ${formatDateAr(term.end_date)}` : ''} — أضف كل أسبوع بنفسك وحدّد تاريخه ونوعه</p>
+      </div>
+      <button type="button" id="addWeekBtn">${ICONS.plus()} إضافة أسبوع</button>
+    </div>
+    <div id="weekFormCard" style="display:none;margin-bottom:16px"></div>
+    <div id="weeksSettingsListArea"></div>`;
+
+  document.getElementById('backToTermsBtn').addEventListener('click', () => { academicCalendarActiveTermId = null; renderSettingsSection(); });
+  document.getElementById('addWeekBtn').addEventListener('click', () => openWeekForm());
+  renderWeeksSettingsList();
+}
+
+function renderWeeksSettingsList() {
+  const area = document.getElementById('weeksSettingsListArea');
+  const weeks = [...(APP.currentTermWeeks || [])].sort((a, b) => (a.week_number || 0) - (b.week_number || 0) || (a.start_date || '').localeCompare(b.start_date || ''));
+
+  if (!weeks.length) { area.innerHTML = '<p style="color:#888">لا توجد أسابيع مضافة بعد لهذا الفصل — أضف الأسبوع الأول من الزر أعلاه</p>'; return; }
+
+  area.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${weeks.map((w) => {
+        const meta = WEEK_TYPE_META[w.week_type] || WEEK_TYPE_META['دراسي'];
+        return `
+        <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="font-weight:700;font-size:12.5px">الأسبوع ${w.week_number}</span>
+            <span class="week-type-badge ${meta.badgeClass}">${escapeHtml(w.week_type || 'دراسي')}</span>
+            <span style="font-size:12px;color:var(--text-muted)">${escapeHtml(w.label || '')}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:11.5px;color:var(--text-muted)">${formatDateAr(w.start_date)} ← ${formatDateAr(w.end_date)}</span>
+            <button type="button" class="btn-icon-edit" data-edit-week="${w.id}" title="تعديل">${ICONS.edit()}</button>
+            <button type="button" class="btn-icon-delete" data-delete-week="${w.id}" title="حذف">${ICONS.trash()}</button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  area.querySelectorAll('[data-edit-week]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const week = weeks.find((w) => String(w.id) === btn.getAttribute('data-edit-week'));
+      if (week) openWeekForm(week);
+    });
+  });
+  area.querySelectorAll('[data-delete-week]').forEach((btn) => {
+    btn.addEventListener('click', () => deleteWeekConfirm(btn.getAttribute('data-delete-week')));
+  });
+}
+
+function openWeekForm(week = null) {
+  const card = document.getElementById('weekFormCard');
+  card.style.display = 'block';
+  card.className = 'card';
+  const nextWeekNumber = week ? week.week_number : (Math.max(0, ...(APP.currentTermWeeks || []).map((w) => w.week_number || 0)) + 1);
+  const typeOptions = Object.keys(WEEK_TYPE_META);
+
+  card.innerHTML = `
+    <h3 style="margin-top:0">${week ? `تعديل الأسبوع ${week.week_number}` : 'إضافة أسبوع جديد'}</h3>
+    <div class="field"><label>رقم الأسبوع</label><input type="number" id="week_number" min="1" value="${nextWeekNumber}"></div>
+    <div class="field"><label>نوع الأسبوع</label>
+      <select id="week_type">
+        ${typeOptions.map((t) => `<option value="${escapeHtml(t)}" ${week && week.week_type === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field"><label>التسمية</label><input type="text" id="week_label" value="${week ? escapeHtml(week.label || '') : `الأسبوع ${nextWeekNumber}`}" placeholder="مثال: الأسبوع ${nextWeekNumber}، أو اسم الإجازة لو كان النوع إجازة"></div>
+    <p style="color:#888;font-size:11.5px;margin-top:-6px">💡 لو اخترت النوع "إجازة"، اكتب بالتسمية اسم الإجازة مباشرة (مثال: إجازة مطر، إجازة الربيع، اليوم الوطني)</p>
+    <div class="field"><label>تاريخ البداية</label><input type="date" id="week_start" value="${week ? week.start_date : ''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" id="week_end" value="${week ? week.end_date : ''}"></div>
+    <div style="display:flex;gap:10px;margin-top:14px">
+      <button type="button" id="saveWeekBtn">${week ? 'حفظ التعديلات' : 'إضافة الأسبوع'}</button>
+      <button type="button" id="cancelWeekBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
+    </div>`;
+
+  document.getElementById('cancelWeekBtn').addEventListener('click', () => { card.style.display = 'none'; card.innerHTML = ''; });
+  document.getElementById('saveWeekBtn').addEventListener('click', () => saveWeekFormSubmit(week ? week.id : null));
+  card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+async function saveWeekFormSubmit(existingId) {
+  const weekNumber = Number(document.getElementById('week_number').value);
+  const weekType = document.getElementById('week_type').value;
+  const label = document.getElementById('week_label').value.trim();
+  const startDate = document.getElementById('week_start').value;
+  const endDate = document.getElementById('week_end').value;
+
+  if (!weekNumber || weekNumber < 1) { showToast('رقم الأسبوع يجب أن يكون 1 أو أكثر', 'error'); return; }
+  if (!label) { showToast('التسمية مطلوبة', 'error'); return; }
+  if (!startDate || !endDate) { showToast('حدّد تاريخ البداية والنهاية', 'error'); return; }
+  if (endDate < startDate) { showToast('تاريخ النهاية يجب أن يكون بعد تاريخ البداية', 'error'); return; }
+
+  const btn = document.getElementById('saveWeekBtn');
+  btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+  try {
+    const body = existingId
+      ? { action: 'updateWeek', id: existingId, weekNumber, weekType, label, startDate, endDate }
+      : { action: 'addWeek', termId: academicCalendarActiveTermId, weekNumber, weekType, label, startDate, endDate };
+    await apiCall('academic-config', { method: 'POST', body });
+    showToast('تم حفظ الأسبوع بنجاح', 'success');
+    document.getElementById('weekFormCard').style.display = 'none';
+    document.getElementById('weekFormCard').innerHTML = '';
+    APP.currentTermWeeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId: academicCalendarActiveTermId } });
+    renderWeeksSettingsList();
+  } catch (e) { showToast(e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = existingId ? 'حفظ التعديلات' : 'إضافة الأسبوع'; }
+}
+
+function deleteWeekConfirm(weekId) {
+  if (!confirm('حذف هذا الأسبوع نهائياً. هل أنت متأكد؟')) return;
+  (async () => {
+    try {
+      await apiCall('academic-config', { method: 'POST', body: { action: 'deleteWeek', id: weekId } });
+      showToast('تم حذف الأسبوع', 'success');
+      APP.currentTermWeeks = await apiCall('academic-config', { method: 'POST', body: { action: 'listWeeksForTerm', termId: academicCalendarActiveTermId } });
+      renderWeeksSettingsList();
+    } catch (e) { showToast(e.message, 'error'); }
+  })();
 }
 
 /* ===================== نقطة الانطلاق ===================== */
