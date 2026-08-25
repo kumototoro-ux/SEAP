@@ -83,18 +83,19 @@ const PAGE_REGISTRY = {
   studentBehavior: { label: 'سلوك الطلاب', icon: 'guardians', render: renderStudentBehaviorView },
   performance: { label: 'تقييم الأداء', icon: 'tasks', render: renderPerformanceView },
   messages: { label: 'المراسلات', icon: 'messages', render: renderMessagesView },
+  reports: { label: 'التقارير', icon: 'settingsGear', render: renderReportsView },
 };
 
 /** 🆕 صلاحيات كل دور — مطابقة تماماً لمنطق ROLE_PAGES بمشروع GAS الأصلي،
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  role_admin: ['home', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'messages'],
-  role_teacher: ['home', 'studentAttendance', 'performance', 'messages'],
-  role_student_sup: ['home', 'students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior', 'performance', 'messages'],
-  role_teacher_sup: ['home', 'staffAttendance', 'performance', 'messages'],
-  Admission: ['home', 'students', 'parents', 'familyAccounts', 'messages'],
-  role_branch_monitor: ['home', 'staffAttendance', 'performance', 'messages'],
+  role_admin: ['home', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
+  role_teacher: ['home', 'messages', 'studentAttendance', 'performance'],
+  role_student_sup: ['home', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
+  role_teacher_sup: ['home', 'messages', 'staffAttendance', 'performance', 'reports'],
+  Admission: ['home', 'messages', 'students', 'parents', 'familyAccounts'],
+  role_branch_monitor: ['home', 'messages', 'staffAttendance', 'performance', 'reports'],
 };
 
 function pagesForCurrentUser() {
@@ -2074,21 +2075,36 @@ async function loadBehaviorForStudent() {
     </div>
 
     <div class="card">
-      <h3 style="margin-bottom:14px">تسجيل موقف سلوكي جديد</h3>
-      <div class="behavior-type-toggle">
-        <button type="button" class="behavior-type-btn active" data-behavior-type="positive">${ICONS.plus()} إيجابي</button>
-        <button type="button" class="behavior-type-btn" data-behavior-type="negative">${ICONS.close()} سلبي</button>
+      <button type="button" class="btn-toggle-form" id="toggleBehFormBtn">${ICONS.plus()} تسجيل موقف سلوكي جديد</button>
+      <div id="behaviorFormCard" style="display:none;margin-top:16px">
+        <input type="hidden" id="beh_editId" value="">
+        <div class="behavior-type-toggle">
+          <button type="button" class="behavior-type-btn active" data-behavior-type="positive">${ICONS.plus()} إيجابي</button>
+          <button type="button" class="behavior-type-btn" data-behavior-type="negative">${ICONS.close()} سلبي</button>
+        </div>
+        <input type="hidden" id="beh_type" value="positive">
+        <div class="field"><label>عدد النقاط</label><input type="number" id="beh_points" min="1" max="100" step="1" value="5"></div>
+        <div class="field"><label>الوصف</label><input type="text" id="beh_description" placeholder="مثال: مساعدة زميل، تكرار عدم إحضار الواجب..."></div>
+        <button type="button" id="beh_addBtn">تسجيل</button>
       </div>
-      <input type="hidden" id="beh_type" value="positive">
-      <div class="field"><label>عدد النقاط</label><input type="number" id="beh_points" min="1" max="100" step="1" value="5"></div>
-      <div class="field"><label>الوصف</label><input type="text" id="beh_description" placeholder="مثال: مساعدة زميل، تكرار عدم إحضار الواجب..."></div>
-      <button type="button" id="beh_addBtn">تسجيل</button>
     </div>
 
     <div class="card">
       <h3>السجل الكامل</h3>
       <div id="behaviorHistoryArea"></div>
     </div>`;
+
+  wireFormToggle('toggleBehFormBtn', 'behaviorFormCard', `${ICONS.plus()} تسجيل موقف سلوكي جديد`);
+
+  function resetBehaviorForm() {
+    document.getElementById('beh_editId').value = '';
+    document.getElementById('beh_points').value = '5';
+    document.getElementById('beh_description').value = '';
+    document.querySelectorAll('.behavior-type-btn').forEach((b) => b.classList.remove('active'));
+    document.querySelector('[data-behavior-type="positive"]').classList.add('active');
+    document.getElementById('beh_type').value = 'positive';
+    document.getElementById('beh_addBtn').textContent = 'تسجيل';
+  }
 
   document.querySelectorAll('.behavior-type-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -2102,23 +2118,26 @@ async function loadBehaviorForStudent() {
 
   document.getElementById('beh_addBtn').addEventListener('click', async () => {
     const btn = document.getElementById('beh_addBtn');
+    const editId = document.getElementById('beh_editId').value;
     const description = document.getElementById('beh_description').value.trim();
     if (!description) { showToast('الوصف مطلوب', 'error'); return; }
     btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
     try {
-      await apiCall('behavior', {
-        method: 'POST',
-        body: {
-          action: 'add', studentId: behaviorSelectedStudentId, branch: student.branch,
-          type: document.getElementById('beh_type').value,
-          points: Math.max(1, Number(document.getElementById('beh_points').value) || 1), // 🆕 حماية إضافية — يمنع إرسال قيمة فارغة أو صفر أو غير صالحة مهما حصل بالواجهة
-          description,
-        },
-      });
-      showToast('تم التسجيل بنجاح', 'success');
+      const body = {
+        action: editId ? 'update' : 'add', studentId: behaviorSelectedStudentId, branch: student.branch,
+        type: document.getElementById('beh_type').value,
+        points: Math.max(1, Number(document.getElementById('beh_points').value) || 1),
+        description,
+      };
+      if (editId) body.id = editId;
+      await apiCall('behavior', { method: 'POST', body });
+      showToast(editId ? 'تم التعديل بنجاح' : 'تم التسجيل بنجاح', 'success');
+      resetBehaviorForm();
+      document.getElementById('behaviorFormCard').style.display = 'none'; // 🆕 النموذج يختفي تلقائياً بعد الحفظ
+      document.getElementById('toggleBehFormBtn').innerHTML = `${ICONS.plus()} تسجيل موقف سلوكي جديد`;
       loadBehaviorForStudent();
     } catch (e) { showToast(e.message, 'error'); }
-    finally { btn.disabled = false; btn.textContent = 'تسجيل'; }
+    finally { btn.disabled = false; btn.textContent = editId ? 'حفظ التعديلات' : 'تسجيل'; }
   });
 }
 
@@ -2126,6 +2145,7 @@ function renderBehaviorHistory(records) {
   const area = document.getElementById('behaviorHistoryArea');
   if (!records.length) { area.innerHTML = '<p style="color:#888">لا يوجد سجل بعد</p>'; return; }
 
+  const canEdit = ['role_admin', 'role_student_sup'].includes(APP.user.role);
   area.innerHTML = records.map((r) => `
     <div class="behavior-history-row ${r.type === 'positive' ? 'behavior-history-positive' : 'behavior-history-negative'}">
       <div class="behavior-history-badge">${r.type === 'positive' ? '+' : '−'}${r.points}</div>
@@ -2133,8 +2153,24 @@ function renderBehaviorHistory(records) {
         <div class="behavior-history-desc">${escapeHtml(r.description)}</div>
         <div class="behavior-history-date">${new Date(r.recorded_at).toLocaleString('ar')}</div>
       </div>
+      ${canEdit ? `<span data-edit-behavior="${r.id}" data-behavior-type="${r.type}" data-behavior-points="${r.points}" data-behavior-desc="${escapeHtml(r.description)}" style="cursor:pointer;color:var(--primary)">${ICONS.edit()}</span>` : ''}
       ${APP.user.role === 'role_admin' ? `<span data-del-behavior="${r.id}" class="behavior-history-delete">${ICONS.trash()}</span>` : ''}
     </div>`).join('');
+
+  area.querySelectorAll('[data-edit-behavior]').forEach((el) => {
+    el.addEventListener('click', () => {
+      document.getElementById('behaviorFormCard').style.display = 'block';
+      document.getElementById('toggleBehFormBtn').innerHTML = `${ICONS.close()} إغلاق النموذج`;
+      document.getElementById('beh_editId').value = el.getAttribute('data-edit-behavior');
+      document.getElementById('beh_points').value = el.getAttribute('data-behavior-points');
+      document.getElementById('beh_description').value = el.getAttribute('data-behavior-desc');
+      const type = el.getAttribute('data-behavior-type');
+      document.getElementById('beh_type').value = type;
+      document.querySelectorAll('.behavior-type-btn').forEach((b) => b.classList.toggle('active', b.getAttribute('data-behavior-type') === type));
+      document.getElementById('beh_addBtn').textContent = 'حفظ التعديلات';
+      document.getElementById('behaviorFormCard').scrollIntoView({ behavior: 'smooth' });
+    });
+  });
 
   area.querySelectorAll('[data-del-behavior]').forEach((el) => {
     el.addEventListener('click', async () => {
@@ -2409,12 +2445,33 @@ async function loadPerfDashboard() {
   const stats = await apiCall('performance', { method: 'POST', body: { action: 'dashboardStats', cycleId, branchFilter } });
 
   area.innerHTML = `
-    <div class="card" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+    <div class="kpi-cards-row">
+      <div class="kpi-card">
+        <div class="kpi-card-icon" style="background:#E7F5EC;color:#2F7A4D">${ICONS.tasks()}</div>
+        <div class="kpi-card-label">متوسط الأداء العام</div>
+        <div class="kpi-card-value">${stats.average}<span style="font-size:13px;color:var(--text-muted)"> /100</span></div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-card-icon" style="background:var(--accent-purple);color:var(--primary)">${ICONS.users()}</div>
+        <div class="kpi-card-label">عدد التقييمات المسجَّلة</div>
+        <div class="kpi-card-value">${stats.count}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-card-icon" style="background:#E7F5EC;color:#2F7A4D">${ICONS.plus()}</div>
+        <div class="kpi-card-label">أفضل نتيجة</div>
+        <div class="kpi-card-value">${stats.topPerformers[0]?.score ?? '—'}</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-card-icon" style="background:#FBEAE8;color:#C4483A">${ICONS.close()}</div>
+        <div class="kpi-card-label">يحتاجون تحسيناً</div>
+        <div class="kpi-card-value">${stats.needsImprovement.length}</div>
+      </div>
+    </div>
+    <div class="card" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-top:14px">
       ${renderGaugeSVG(stats.average)}
       <div>
-        <div style="font-size:12.5px;color:var(--text-muted);font-weight:700">متوسط الأداء العام</div>
-        <div style="font-size:28px;font-weight:800;color:var(--primary)">${stats.average} <span style="font-size:14px;color:var(--text-muted);font-weight:600">/ 100</span></div>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${stats.count} تقييماً مسجَّلاً هذي الدورة</div>
+        <div style="font-size:12.5px;color:var(--text-muted);font-weight:700">التوزيع العام للأداء</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">مقياس بصري سريع لمتوسط الأداء بهذي الدورة</div>
       </div>
     </div>
     <div class="card">
@@ -2834,6 +2891,161 @@ function openComposeMessageModal(prefill) {
     } catch (e) { showToast(e.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = 'إرسال'; }
   });
+}
+
+/* ===================== صفحة التقارير الموحَّدة ===================== */
+
+const REPORT_DOMAIN_LABELS_ = { performance: 'تقييم الأداء', behavior: 'سلوك الطلاب', studentAttendance: 'تحضير الطلاب', staffAttendance: 'تحضير الموظفين' };
+const REPORT_DOMAINS_BY_ROLE_FE_ = {
+  role_admin: ['performance', 'behavior', 'studentAttendance', 'staffAttendance'],
+  role_branch_monitor: ['performance', 'staffAttendance'],
+  role_teacher_sup: ['performance', 'staffAttendance'],
+  role_student_sup: ['behavior', 'studentAttendance'],
+};
+let reportSelectedPersonIds = [];
+
+async function renderReportsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  const settings = await getSettingsOnce();
+  const role = APP.user.role;
+  const allowedDomains = REPORT_DOMAINS_BY_ROLE_FE_[role] || [];
+  reportSelectedPersonIds = [];
+
+  if (!allowedDomains.length) { main.innerHTML = '<div class="card"><p style="color:#888">لا تملك صلاحية إنشاء تقارير</p></div>'; return; }
+
+  const branchLocked = role === 'role_teacher_sup' || role === 'role_student_sup';
+  const branchOptions = role === 'role_admin' ? settings.branches : (role === 'role_branch_monitor' ? (APP.user.allBranches || [APP.user.branch]) : [APP.user.branch]);
+
+  main.innerHTML = `
+    <div class="card">
+      <h2>إنشاء تقرير جديد</h2>
+      <div class="field"><label>نوع التقرير</label><select id="rep_domain">${allowedDomains.map((d) => `<option value="${d}">${escapeHtml(REPORT_DOMAIN_LABELS_[d])}</option>`).join('')}</select></div>
+
+      <div class="filter-card-title">${branchLocked ? 'الفرع (مقيَّد بفرعك)' : 'الفرع/الفروع (اتركه فارغاً = كل الفروع المتاحة لك)'}</div>
+      <div class="checkbox-list" id="rep_branchesBox">${scopeCheckboxesHtml(branchOptions, branchLocked ? branchOptions : [], 'rep-branch-cb')}</div>
+
+      <div id="rep_studentFiltersBox" style="display:none">
+        <div class="filter-card-title">الصفوف (اختياري)</div>
+        <div class="checkbox-list" id="rep_gradesBox">${scopeCheckboxesHtml(settings.grades, [], 'rep-grade-cb')}</div>
+        <div class="filter-card-title">الشعب (اختياري)</div>
+        <div class="checkbox-list" id="rep_sectionsBox">${scopeCheckboxesHtml(settings.sections, [], 'rep-section-cb')}</div>
+      </div>
+
+      <div id="rep_cycleBox" style="display:none">
+        <div class="field"><label>دورة التقييم</label><select id="rep_cycle"></select></div>
+      </div>
+
+      <div class="filter-card-title">أشخاص محدَّدون (اختياري — اتركه فارغاً لتقرير عن المجموعة كاملة)</div>
+      <div class="student-search-input-wrap"><input type="text" id="rep_personSearch" placeholder="ابحث بالاسم لإضافة فرد..."></div>
+      <div id="rep_personResults" class="student-search-results"></div>
+      <div id="rep_selectedPersons" class="student-chip-list" style="margin-top:8px"><span class="student-linker-empty">لا يوجد أفراد محدَّدون</span></div>
+
+      <button type="button" id="rep_generateBtn" style="margin-top:14px;width:100%">إنشاء التقرير</button>
+    </div>
+    <div id="reportResultArea"></div>`;
+
+  if (branchLocked) document.querySelectorAll('.rep-branch-cb').forEach((cb) => { cb.disabled = true; });
+
+  document.getElementById('rep_domain').addEventListener('change', updateReportFormFields);
+  updateReportFormFields();
+
+  document.getElementById('rep_personSearch').addEventListener('input', async (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    const box = document.getElementById('rep_personResults');
+    if (q.length < 2) { box.innerHTML = ''; box.classList.remove('show'); return; }
+    const domain = document.getElementById('rep_domain').value;
+    const isStudentDomain = ['behavior', 'studentAttendance'].includes(domain);
+    let pool;
+    if (isStudentDomain) {
+      if (!APP.allStudents || !APP.allStudents.length) APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+      pool = APP.allStudents;
+    } else {
+      if (!APP.allEmployees || !APP.allEmployees.length) APP.allEmployees = await apiCall('employees', { method: 'POST', body: { action: 'list' } });
+      pool = APP.allEmployees;
+    }
+    const matches = pool.filter((p) => p.name_ar.toLowerCase().includes(q) && !reportSelectedPersonIds.includes(p.id)).slice(0, 6);
+    box.classList.add('show');
+    box.innerHTML = matches.map((p) => `<div class="search-result-item" data-pick-person="${escapeHtml(p.id)}" data-pick-name="${escapeHtml(p.name_ar)}"><div class="search-result-label">${escapeHtml(p.name_ar)}</div></div>`).join('') || '<p style="padding:10px;color:#aaa;font-size:12px">لا نتائج</p>';
+    box.querySelectorAll('[data-pick-person]').forEach((el) => {
+      el.addEventListener('click', () => {
+        reportSelectedPersonIds.push(el.getAttribute('data-pick-person'));
+        renderSelectedReportPersons(el.getAttribute('data-pick-name'));
+        box.innerHTML = ''; box.classList.remove('show');
+        document.getElementById('rep_personSearch').value = '';
+      });
+    });
+  });
+
+  document.getElementById('rep_generateBtn').addEventListener('click', generateReportHandler);
+}
+
+function renderSelectedReportPersons(justAddedName) {
+  const box = document.getElementById('rep_selectedPersons');
+  if (!reportSelectedPersonIds.length) { box.innerHTML = '<span class="student-linker-empty">لا يوجد أفراد محدَّدون</span>'; return; }
+  const existing = box.querySelector('.student-linker-empty') ? [] : Array.from(box.querySelectorAll('.student-chip')).map((c) => c.getAttribute('data-name'));
+  if (justAddedName) existing.push(justAddedName);
+  box.innerHTML = reportSelectedPersonIds.map((id, i) => `<span class="student-chip" data-name="${escapeHtml(existing[i] || id)}">${escapeHtml(existing[i] || id)}<span data-remove-person="${i}" class="student-chip-remove">${ICONS.close()}</span></span>`).join('');
+  box.querySelectorAll('[data-remove-person]').forEach((el) => {
+    el.addEventListener('click', () => { reportSelectedPersonIds.splice(Number(el.getAttribute('data-remove-person')), 1); renderSelectedReportPersons(); });
+  });
+}
+
+function updateReportFormFields() {
+  const domain = document.getElementById('rep_domain').value;
+  document.getElementById('rep_studentFiltersBox').style.display = ['behavior', 'studentAttendance'].includes(domain) ? 'block' : 'none';
+  document.getElementById('rep_cycleBox').style.display = domain === 'performance' ? 'block' : 'none';
+  if (domain === 'performance') loadCyclesForReport();
+}
+
+async function loadCyclesForReport() {
+  const cycles = await apiCall('performance', { method: 'POST', body: { action: 'listCycles' } });
+  document.getElementById('rep_cycle').innerHTML = cycles.map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('');
+}
+
+async function generateReportHandler() {
+  const domain = document.getElementById('rep_domain').value;
+  const branches = collectCheckedValues('.rep-branch-cb');
+  const grades = collectCheckedValues('.rep-grade-cb');
+  const sections = collectCheckedValues('.rep-section-cb');
+  const cycleId = domain === 'performance' ? document.getElementById('rep_cycle').value : undefined;
+
+  const area = document.getElementById('reportResultArea');
+  area.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+  try {
+    const result = await apiCall('performance', {
+      method: 'POST',
+      body: { action: 'generateReport', domain, branches, grades, sections, personIds: reportSelectedPersonIds, cycleId },
+    });
+    renderReportResult(result, domain);
+  } catch (e) { area.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`; }
+}
+
+function renderReportResult(result, domain) {
+  const area = document.getElementById('reportResultArea');
+  const now = new Date().toLocaleString('ar');
+  area.innerHTML = `
+    <div class="card report-print-header">
+      <div style="display:flex;align-items:center;gap:10px">${mirqatLogo(28)}<span style="font-weight:800;font-size:15px">مِرقاة</span></div>
+      <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
+        نوع التقرير: ${escapeHtml(REPORT_DOMAIN_LABELS_[domain])} — أُنشئ بواسطة ${escapeHtml(APP.user.fullName)} (${escapeHtml(ROLE_LABELS_AR[APP.user.role] || APP.user.role)}) — ${now}
+      </div>
+    </div>
+    <div class="card" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+      ${renderGaugeSVG(result.average)}
+      <div>
+        <div style="font-size:12.5px;color:var(--text-muted);font-weight:700">المتوسط العام</div>
+        <div style="font-size:28px;font-weight:800;color:var(--primary)">${result.average}<span style="font-size:14px;color:var(--text-muted)"> ${escapeHtml(result.unit)}</span></div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${result.count} سجلاً</div>
+      </div>
+      <button type="button" id="printReportBtn" style="width:auto;margin-right:auto">${ICONS.plus()} طباعة / حفظ PDF</button>
+    </div>
+    <div class="card">
+      <h3>التفاصيل الكاملة</h3>
+      ${renderBarChartSVG(result.rows.map((r) => ({ label: r.name || '—', value: r.score })), '#7B5FB8')}
+    </div>`;
+
+  document.getElementById('printReportBtn').addEventListener('click', () => window.print());
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
