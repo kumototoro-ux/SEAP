@@ -306,6 +306,110 @@ async function handleListEvaluationsForCycle(req, res) {
   return res.status(200).json({ success: true, data: result });
 }
 
+/* ===================== محرّك التقارير الموحَّد — يخدم كل الصفحات بصلاحيات دقيقة ===================== */
+
+/** 🆕 أي دور يقدر يستخرج تقريراً عن أي نوع صفحة — مطابق تماماً لخارطة الصلاحيات الموثَّقة */
+const REPORT_DOMAINS_BY_ROLE_ = {
+  role_admin: ['performance', 'behavior', 'studentAttendance', 'staffAttendance'],
+  role_branch_monitor: ['performance', 'staffAttendance'],
+  role_teacher_sup: ['performance', 'staffAttendance'],
+  role_student_sup: ['behavior', 'studentAttendance'],
+};
+
+function resolveEffectiveBranches_(user, requestedBranches) {
+  if (user.role === 'role_admin') return (requestedBranches && requestedBranches.length) ? requestedBranches : null; // null = بلا قيد (كل الفروع)
+  if (user.role === 'role_branch_monitor') {
+    const allowed = user.allBranches || [user.branch];
+    const effective = (requestedBranches && requestedBranches.length) ? requestedBranches.filter((b) => allowed.includes(b)) : allowed;
+    if (!effective.length) { const e = new Error('لا تملك صلاحية على أي من الفروع المطلوبة'); e.statusCode = 403; throw e; }
+    return effective;
+  }
+  return [user.branch]; // teacher_sup / student_sup — فرعهم فقط، بلا أي اختيار
+}
+
+async function handleGenerateReport(req, res) {
+  const user = requireAuth(req);
+  const { domain, branches, grades, sections, personIds, cycleId } = req.body;
+
+  const allowedDomains = REPORT_DOMAINS_BY_ROLE_[user.role] || [];
+  if (!allowedDomains.includes(domain)) {
+    const e = new Error('دورك لا يملك صلاحية هذا النوع من التقارير');
+    e.statusCode = 403;
+    throw e;
+  }
+
+  const effectiveBranches = resolveEffectiveBranches_(user, branches);
+
+  if (domain === 'performance') return generatePerformanceReport_(res, effectiveBranches, personIds, cycleId);
+  if (domain === 'behavior') return generateBehaviorReport_(res, effectiveBranches, grades, sections, personIds);
+  if (domain === 'staffAttendance') return generateAttendanceReport_(res, 'employee', effectiveBranches, null, null, personIds);
+  if (domain === 'studentAttendance') return generateAttendanceReport_(res, 'student', effectiveBranches, grades, sections, personIds);
+
+  const e = new Error('نوع تقرير غير معروف');
+  e.statusCode = 400;
+  throw e;
+}
+
+async function generatePerformanceReport_(res, branches, personIds, cycleId) {
+  if (!cycleId) { const e = new Error('اختر دورة التقييم أولاً'); e.statusCode = 400; throw e; }
+  let query = supabaseAdmin.from('evaluations').select('final_score, branch, employees(name_ar, role)').eq('cycle_id', cycleId);
+  if (branches) query = query.in('branch', branches);
+  if (personIds && personIds.length) query = query.in('employee_id', personIds);
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const rows = data.map((r) => ({ name: r.employees?.name_ar, branch: r.branch, role: r.employees?.role, score: Number(r.final_score) }));
+  const average = rows.length ? Math.round((rows.reduce((s, r) => s + r.score, 0) / rows.length) * 100) / 100 : 0;
+  return res.status(200).json({ success: true, data: { rows, average, count: rows.length, unit: '/100' } });
+}
+
+async function generateBehaviorReport_(res, branches, grades, sections, personIds) {
+  let studentsQuery = supabaseAdmin.from('students').select('id, name_ar, branch, grade, section').is('deleted_at', null);
+  if (branches) studentsQuery = studentsQuery.in('branch', branches);
+  if (grades && grades.length) studentsQuery = studentsQuery.in('grade', grades);
+  if (sections && sections.length) studentsQuery = studentsQuery.in('section', sections);
+  if (personIds && personIds.length) studentsQuery = studentsQuery.in('id', personIds);
+  const { data: students, error: stuError } = await studentsQuery;
+  if (stuError) throw stuError;
+  if (!students.length) return res.status(200).json({ success: true, data: { rows: [], average: 0, count: 0, unit: '/100' } });
+
+  const { data: records } = await supabaseAdmin.from('student_behavior').select('student_id, type, points').in('student_id', students.map((s) => s.id));
+  const scoreMap = {};
+  students.forEach((s) => { scoreMap[s.id] = 100; });
+  (records || []).forEach((r) => { scoreMap[r.student_id] += r.type === 'positive' ? r.points : -r.points; });
+
+  const rows = students.map((s) => ({ name: s.name_ar, branch: s.branch, role: `${s.grade} — ${s.section}`, score: Math.max(0, Math.min(100, scoreMap[s.id])) }));
+  const average = Math.round((rows.reduce((s, r) => s + r.score, 0) / rows.length) * 100) / 100;
+  return res.status(200).json({ success: true, data: { rows, average, count: rows.length, unit: '/100' } });
+}
+
+async function generateAttendanceReport_(res, personType, branches, grades, sections, personIds) {
+  let query = supabaseAdmin.from('attendance').select('person_id, status, branch').eq('person_type', personType);
+  if (branches) query = query.in('branch', branches);
+  if (grades && grades.length) query = query.in('grade', grades);
+  if (sections && sections.length) query = query.in('section', sections);
+  if (personIds && personIds.length) query = query.in('person_id', personIds);
+  const { data: records, error } = await query;
+  if (error) throw error;
+  if (!records.length) return res.status(200).json({ success: true, data: { rows: [], average: 0, count: 0, unit: '% حضور' } });
+
+  const table = personType === 'student' ? 'students' : 'employees';
+  const uniqueIds = [...new Set(records.map((r) => r.person_id))];
+  const { data: people } = await supabaseAdmin.from(table).select('id, name_ar').in('id', uniqueIds);
+  const nameMap = {}; (people || []).forEach((p) => { nameMap[p.id] = p.name_ar; });
+
+  const byPerson = {};
+  records.forEach((r) => {
+    if (!byPerson[r.person_id]) byPerson[r.person_id] = { total: 0, present: 0, branch: r.branch };
+    byPerson[r.person_id].total += 1;
+    if (r.status === 'حاضر') byPerson[r.person_id].present += 1;
+  });
+
+  const rows = Object.entries(byPerson).map(([id, v]) => ({ name: nameMap[id] || id, branch: v.branch, role: `${v.total} يوم مُسجَّل`, score: Math.round((v.present / v.total) * 100) }));
+  const average = Math.round((rows.reduce((s, r) => s + r.score, 0) / rows.length) * 100) / 100;
+  return res.status(200).json({ success: true, data: { rows, average, count: rows.length, unit: '% حضور' } });
+}
+
 export default createRouter({
   myEvaluations: handleMyEvaluations,
   listEvaluatable: handleListEvaluatable,
