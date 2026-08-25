@@ -72,6 +72,7 @@ const APP = { token: null, user: null };
 const PAGE_REGISTRY = {
   home: { label: 'الرئيسية', icon: 'home', render: renderHomeView },
   academicCalendar: { label: 'التقويم الدراسي', icon: 'calendar', render: renderAcademicCalendarView }, // 🆕
+  schedules: { label: 'الجداول الدراسية', icon: 'schedule', render: renderSchedulesView }, // 🆕
   employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
   parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
@@ -91,14 +92,14 @@ const PAGE_REGISTRY = {
  * لكن مقتصرة على الصفحات المبنية فعلياً بهذا المشروع حتى الآن. أي دور
  * غير مذكور هنا (أو صفحة لم تُبنَ بعد لدوره) يحصل تلقائياً على "الرئيسية" فقط. */
 const ROLE_PAGES = {
-  // 🆕 أُضيفت 'academicCalendar' لكل الأدوار — كل الأدوار تملك صفحة "التقويم
-  // الدراسي" حسب خارطة الصلاحيات الموثَّقة أعلاه (عرض فقط لغير الأدمن)
-  role_admin: ['home', 'academicCalendar', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
-  role_teacher: ['home', 'academicCalendar', 'messages', 'studentAttendance', 'performance'],
-  role_student_sup: ['home', 'academicCalendar', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
-  role_teacher_sup: ['home', 'academicCalendar', 'messages', 'staffAttendance', 'performance', 'reports'],
+  // 🆕 أُضيفت 'academicCalendar' و'schedules' لكل الأدوار المصرَّح لها (عدا
+  // Admission التي لا تملك صفحة جداول أصلاً بحسب خارطة الصلاحيات أعلاه)
+  role_admin: ['home', 'academicCalendar', 'schedules', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
+  role_teacher: ['home', 'academicCalendar', 'schedules', 'messages', 'studentAttendance', 'performance'],
+  role_student_sup: ['home', 'academicCalendar', 'schedules', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
+  role_teacher_sup: ['home', 'academicCalendar', 'schedules', 'messages', 'staffAttendance', 'performance', 'reports'],
   Admission: ['home', 'academicCalendar', 'messages', 'students', 'parents', 'familyAccounts'],
-  role_branch_monitor: ['home', 'academicCalendar', 'messages', 'staffAttendance', 'performance', 'reports'],
+  role_branch_monitor: ['home', 'academicCalendar', 'schedules', 'messages', 'staffAttendance', 'performance', 'reports'],
 };
 
 function pagesForCurrentUser() {
@@ -111,6 +112,7 @@ function pagesForCurrentUser() {
 const SIDEBAR_GROUPS = [
   { type: 'single', key: 'home' },
   { type: 'single', key: 'academicCalendar' }, // 🆕
+  { type: 'single', key: 'schedules' }, // 🆕
   { type: 'single', key: 'messages' },
   { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
   { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
@@ -312,7 +314,7 @@ function renderShell() {
   // عن القائمة الجانبية اللي تبقى تحتوي كل الصفحات الأخرى (تُفتَح بزر ☰)
   const BOTTOM_NAV_ITEMS = [
     { key: 'home', label: 'الرئيسية', icon: 'home', ready: true },
-    { key: 'messages', label: 'المراسلات', icon: 'messages', ready: false },
+    { key: 'messages', label: 'المراسلات', icon: 'messages', ready: true },
     { key: 'search', label: 'بحث', icon: 'search', ready: true },
     { key: 'tasks', label: 'المهام', icon: 'tasks', ready: false },
   ];
@@ -3523,15 +3525,17 @@ function renderCalendarMonthGrid() {
     const dateStr = toISODateLocal(cellDate);
     const isCurrentMonth = cellDate.getMonth() === monthIndex;
     const isToday = dateStr === todayStr;
-    // 🆕 الإجازة تعلو الأسبوع بنفس اليوم (تراكب مقصود)
+    // 🆕 الإجازة تعلو الأسبوع بنفس اليوم (تراكب مقصود) — ومظهرها "مبهر" بلمحة بصر
     const holidayInfo = holidayMap[dateStr];
     const weekInfo = weekMap[dateStr];
-    const chipInfo = holidayInfo ? { label: holidayInfo.label, badgeClass: 'week-type-holiday' } : (weekInfo ? { label: weekInfo.label || weekInfo.week_type, badgeClass: WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study' } : null);
+    const chipInfo = holidayInfo
+      ? { label: `🌴 ${holidayInfo.label}`, chipClass: 'calendar-chip-holiday', cellClass: 'calendar-cell-holiday' }
+      : (weekInfo ? { label: weekInfo.label || weekInfo.week_type, chipClass: WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study', cellClass: '' } : null);
 
     cellsHtml += `
-      <div class="calendar-cell ${isCurrentMonth ? '' : 'calendar-cell-outside'} ${isToday ? 'calendar-cell-today' : ''}" ${chipInfo ? `data-cal-day="${dateStr}"` : ''}>
+      <div class="calendar-cell ${isCurrentMonth ? '' : 'calendar-cell-outside'} ${isToday ? 'calendar-cell-today' : ''} ${chipInfo ? chipInfo.cellClass : ''}" ${chipInfo ? `data-cal-day="${dateStr}"` : ''}>
         <span class="calendar-cell-daynum">${cellDate.getDate()}</span>
-        ${chipInfo ? `<span class="calendar-event-chip ${chipInfo.badgeClass}">${escapeHtml(chipInfo.label)}</span>` : ''}
+        ${chipInfo ? `<span class="calendar-event-chip ${chipInfo.chipClass}">${escapeHtml(chipInfo.label)}</span>` : ''}
       </div>`;
   }
 
@@ -3606,12 +3610,14 @@ function renderCalendarWeekGrid() {
     const isToday = dateStr === todayStr;
     const holidayInfo = holidayMap[dateStr];
     const weekInfo = weekMap[dateStr];
-    const chipInfo = holidayInfo ? { label: holidayInfo.label, badgeClass: 'week-type-holiday' } : (weekInfo ? { label: weekInfo.label || weekInfo.week_type, badgeClass: WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study' } : null);
+    const chipInfo = holidayInfo
+      ? { label: `🌴 ${holidayInfo.label}`, chipClass: 'calendar-chip-holiday', cellClass: 'calendar-cell-holiday' }
+      : (weekInfo ? { label: weekInfo.label || weekInfo.week_type, chipClass: WEEK_TYPE_META[weekInfo.week_type]?.badgeClass || 'week-type-study', cellClass: '' } : null);
 
     cellsHtml += `
-      <div class="calendar-cell calendar-week-cell ${isToday ? 'calendar-cell-today' : ''}" ${chipInfo ? `data-cal-day="${dateStr}"` : ''}>
+      <div class="calendar-cell calendar-week-cell ${isToday ? 'calendar-cell-today' : ''} ${chipInfo ? chipInfo.cellClass : ''}" ${chipInfo ? `data-cal-day="${dateStr}"` : ''}>
         <span class="calendar-cell-daynum">${cellDate.getDate()}</span>
-        ${chipInfo ? `<span class="calendar-event-chip ${chipInfo.badgeClass}">${escapeHtml(chipInfo.label)}</span>` : '<span style="color:#bbb;font-size:11px">لا يوجد</span>'}
+        ${chipInfo ? `<span class="calendar-event-chip ${chipInfo.chipClass}">${escapeHtml(chipInfo.label)}</span>` : '<span style="color:#bbb;font-size:11px">لا يوجد</span>'}
       </div>`;
   }
 
@@ -4094,6 +4100,428 @@ function deleteHolidayConfirm(holidayId) {
       showToast('تم حذف الإجازة', 'success');
       APP.currentTermHolidays = await apiCall('academic-config', { method: 'POST', body: { action: 'listHolidaysForTerm', termId: academicCalendarActiveTermId } });
       renderHolidaysSettingsList();
+    } catch (e) { showToast(e.message, 'error'); }
+  })();
+}
+
+/* ===================== 🆕 صفحة الجداول الدراسية (حصص + اختبارات) ===================== */
+// ثلاثة أدوار فقط تعدّل (أدمن بلا قيد، مراقب فروع بفروعه، مشرف معلمين
+// بفرعه) — الباقي (مشرف طلاب) عرض فقط. المعلم يشوف جدوله الشخصي فقط
+// (حصصه/لجانه هو) بلا فلاتر صف/شعبة — بقية الأدوار تختار صفاً لعرض جدوله.
+
+const SCHEDULE_DAYS = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'];
+const SCHEDULE_PERIODS = [1, 2, 3, 4, 5, 6, 7, 8];
+const EXAM_PERIOD_SLOTS = ['الفترة الأولى', 'الفترة الثانية'];
+
+let schedulesActiveTab = 'class'; // 🆕 'class' | 'exam'
+let scheduleFilterBranch = null, scheduleFilterStage = null, scheduleFilterGrade = null, scheduleFilterSection = null;
+
+function canManageSchedules() {
+  return ['role_admin', 'role_branch_monitor', 'role_teacher_sup'].includes(APP.user.role);
+}
+
+/** 🆕 الفروع المتاحة للمستخدم الحالي بالفلاتر (أدمن=الكل، مراقب فروع=فروعه، الباقي=فرعه فقط) */
+function allowedBranchesForSchedules(allBranches) {
+  if (APP.user.role === 'role_admin') return allBranches;
+  if (APP.user.role === 'role_branch_monitor') return (APP.user.allBranches || []).filter((b) => allBranches.includes(b));
+  return allBranches.includes(APP.user.branch) ? [APP.user.branch] : [];
+}
+
+async function renderSchedulesView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  main.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <h2 style="margin:0">الجداول الدراسية</h2>
+        <div class="segmented-control" id="schedTabBar">
+          <button type="button" class="segmented-item ${schedulesActiveTab === 'class' ? 'active' : ''}" data-sched-tab="class">الجدول الدراسي</button>
+          <button type="button" class="segmented-item ${schedulesActiveTab === 'exam' ? 'active' : ''}" data-sched-tab="exam">جدول الاختبارات</button>
+        </div>
+      </div>
+      <div id="schedulesContentArea"></div>
+    </div>`;
+
+  document.querySelectorAll('#schedTabBar .segmented-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      schedulesActiveTab = btn.getAttribute('data-sched-tab');
+      document.querySelectorAll('#schedTabBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderSchedulesContent();
+    });
+  });
+
+  renderSchedulesContent();
+}
+
+async function renderSchedulesContent() {
+  const area = document.getElementById('schedulesContentArea');
+  if (APP.user.role === 'role_teacher') {
+    // 🆕 المعلم: جدوله الشخصي مباشرة، بلا فلاتر صف/شعبة
+    if (schedulesActiveTab === 'class') await renderTeacherOwnClassSchedule(area);
+    else await renderTeacherOwnExamSchedule(area);
+    return;
+  }
+  if (schedulesActiveTab === 'class') await renderClassScheduleTab(area);
+  else await renderExamScheduleTab(area);
+}
+
+/* -------------------- عرض المعلم الشخصي (بلا فلاتر) -------------------- */
+
+async function renderTeacherOwnClassSchedule(area) {
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let entries;
+  try {
+    entries = await apiCall('academic-config', { method: 'POST', body: { action: 'listClassSchedule' } });
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  if (!entries.length) { area.innerHTML = '<p style="color:#888">لا توجد حصص مسجَّلة لك بعد</p>'; return; }
+
+  area.innerHTML = SCHEDULE_DAYS.map((day) => {
+    const dayEntries = entries.filter((e) => e.day_of_week === day).sort((a, b) => a.period_number - b.period_number);
+    if (!dayEntries.length) return '';
+    return `
+      <div style="margin-bottom:18px">
+        <div class="filter-card-title" style="margin-bottom:8px">${day}</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${dayEntries.map((e) => `
+            <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+              <span style="font-size:12.5px;font-weight:700">الحصة ${e.period_number} — ${escapeHtml(e.subject)}</span>
+              <span style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(e.grade)} / ${escapeHtml(e.section)} — ${escapeHtml(e.branch)}</span>
+            </div>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function renderTeacherOwnExamSchedule(area) {
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let entries;
+  try {
+    entries = await apiCall('academic-config', { method: 'POST', body: { action: 'listExamSchedule' } });
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  if (!entries.length) { area.innerHTML = '<p style="color:#888">لا توجد لجان مراقبة مسندة لك بعد</p>'; return; }
+
+  const sorted = [...entries].sort((a, b) => (a.exam_date || '').localeCompare(b.exam_date || ''));
+  area.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${sorted.map((e) => `
+        <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+          <span style="font-size:12.5px;font-weight:700">${formatDateAr(e.exam_date)} — ${e.period_slot}</span>
+          <span style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(e.subject)} — ${escapeHtml(e.grade)} / ${escapeHtml(e.section)} — ${escapeHtml(e.branch)}</span>
+        </div>`).join('')}
+    </div>`;
+}
+
+/* -------------------- شريط فلاتر الصف (مشترك بين التبويبين) -------------------- */
+
+async function renderScheduleClassFilters(area, onFilterReady) {
+  const settings = await getSettingsOnce();
+  const allowedBranches = allowedBranchesForSchedules(settings.branches || []);
+
+  if (!allowedBranches.length) { area.innerHTML = '<p style="color:#888">لا يوجد فرع متاح لك حالياً</p>'; return; }
+  if (!scheduleFilterBranch || !allowedBranches.includes(scheduleFilterBranch)) scheduleFilterBranch = allowedBranches[0];
+  if (!scheduleFilterStage || !(settings.stages || []).includes(scheduleFilterStage)) scheduleFilterStage = (settings.stages || [])[0] || null;
+  if (!scheduleFilterGrade || !(settings.grades || []).includes(scheduleFilterGrade)) scheduleFilterGrade = (settings.grades || [])[0] || null;
+  if (!scheduleFilterSection || !(settings.sections || []).includes(scheduleFilterSection)) scheduleFilterSection = (settings.sections || [])[0] || null;
+
+  area.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+        <div class="field"><label>الفرع</label><select id="schedFilterBranch">${allowedBranches.map((b) => `<option value="${escapeHtml(b)}" ${b === scheduleFilterBranch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select></div>
+        <div class="field"><label>المرحلة</label><select id="schedFilterStage">${(settings.stages || []).map((s) => `<option value="${escapeHtml(s)}" ${s === scheduleFilterStage ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
+        <div class="field"><label>الصف</label><select id="schedFilterGrade">${(settings.grades || []).map((g) => `<option value="${escapeHtml(g)}" ${g === scheduleFilterGrade ? 'selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
+        <div class="field"><label>الشعبة</label><select id="schedFilterSection">${(settings.sections || []).map((s) => `<option value="${escapeHtml(s)}" ${s === scheduleFilterSection ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
+      </div>
+    </div>`;
+
+  ['schedFilterBranch', 'schedFilterStage', 'schedFilterGrade', 'schedFilterSection'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', (e) => {
+      if (id === 'schedFilterBranch') scheduleFilterBranch = e.target.value;
+      if (id === 'schedFilterStage') scheduleFilterStage = e.target.value;
+      if (id === 'schedFilterGrade') scheduleFilterGrade = e.target.value;
+      if (id === 'schedFilterSection') scheduleFilterSection = e.target.value;
+      onFilterReady();
+    });
+  });
+
+  onFilterReady();
+}
+
+/* -------------------- تبويب الجدول الدراسي -------------------- */
+
+async function renderClassScheduleTab(area) {
+  area.innerHTML = `
+    <div id="schedClassFiltersArea"></div>
+    <div id="schedClassGridArea"></div>`;
+  await renderScheduleClassFilters(document.getElementById('schedClassFiltersArea'), loadAndRenderClassGrid);
+}
+
+async function loadAndRenderClassGrid() {
+  const gridArea = document.getElementById('schedClassGridArea');
+  gridArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let entries;
+  try {
+    entries = await apiCall('academic-config', { method: 'POST', body: { action: 'listClassSchedule' } });
+  } catch (e) { gridArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  APP.currentClassScheduleEntries = entries;
+  renderClassScheduleGrid();
+}
+
+function renderClassScheduleGrid() {
+  const gridArea = document.getElementById('schedClassGridArea');
+  const entries = (APP.currentClassScheduleEntries || []).filter((e) =>
+    e.branch === scheduleFilterBranch && e.stage === scheduleFilterStage && e.grade === scheduleFilterGrade && e.section === scheduleFilterSection);
+  const map = {};
+  entries.forEach((e) => { map[`${e.day_of_week}|${e.period_number}`] = e; });
+  const canManage = canManageSchedules();
+
+  gridArea.innerHTML = `
+    <div class="schedule-grid-wrap">
+      <table class="schedule-table">
+        <thead><tr><th></th>${SCHEDULE_DAYS.map((d) => `<th>${d}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${SCHEDULE_PERIODS.map((p) => `
+            <tr>
+              <td class="schedule-period-label">الحصة ${p}</td>
+              ${SCHEDULE_DAYS.map((day) => {
+                const entry = map[`${day}|${p}`];
+                if (entry) {
+                  return `<td class="schedule-cell schedule-cell-filled ${canManage ? 'schedule-cell-clickable' : ''}" data-sched-cell="${day}|${p}">
+                    <div class="schedule-cell-subject">${escapeHtml(entry.subject)}</div>
+                    <div class="schedule-cell-teacher">${escapeHtml(entry.teacher_name || '')}</div>
+                  </td>`;
+                }
+                return `<td class="schedule-cell ${canManage ? 'schedule-cell-clickable' : ''}" data-sched-cell="${day}|${p}">${canManage ? '<span class="schedule-cell-add">+</span>' : ''}</td>`;
+              }).join('')}
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  if (canManage) {
+    gridArea.querySelectorAll('[data-sched-cell]').forEach((cell) => {
+      cell.addEventListener('click', () => {
+        const [day, period] = cell.getAttribute('data-sched-cell').split('|');
+        const entry = map[`${day}|${period}`];
+        openClassScheduleForm(day, Number(period), entry || null);
+      });
+    });
+  }
+}
+
+async function openClassScheduleForm(day, period, entry) {
+  let staff;
+  try {
+    staff = await apiCall('academic-config', { method: 'POST', body: { action: 'listStaffForScheduling' } });
+  } catch (e) { showToast(e.message, 'error'); return; }
+  const teachers = staff.filter((s) => s.role === 'role_teacher');
+  const settings = await getSettingsOnce();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay show';
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:420px">
+      <div class="modal-header">
+        <h3>${entry ? 'تعديل حصة' : 'إضافة حصة'} — ${day} — الحصة ${period}</h3>
+        <button type="button" class="modal-close-btn" id="schedFormCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>المادة</label>
+          <select id="sched_subject">${(settings.subjects || []).map((s) => `<option value="${escapeHtml(s)}" ${entry && entry.subject === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>المعلم</label>
+          <select id="sched_teacher">${teachers.map((t) => `<option value="${t.id}" ${entry && String(entry.teacher_id) === String(t.id) ? 'selected' : ''}>${escapeHtml(t.name_ar)}</option>`).join('')}</select>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:14px">
+          <button type="button" id="schedFormSaveBtn" style="flex:1">حفظ</button>
+          ${entry ? `<button type="button" id="schedFormDeleteBtn" class="btn-danger-outline">حذف</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('schedFormCloseBtn').addEventListener('click', close);
+
+  document.getElementById('schedFormSaveBtn').addEventListener('click', async () => {
+    const subject = document.getElementById('sched_subject').value;
+    const teacherId = document.getElementById('sched_teacher').value;
+    if (!subject || !teacherId) { showToast('أكمل كل الحقول', 'error'); return; }
+    const btn = document.getElementById('schedFormSaveBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    try {
+      const body = {
+        action: 'saveClassScheduleEntry', branch: scheduleFilterBranch, stage: scheduleFilterStage,
+        grade: scheduleFilterGrade, section: scheduleFilterSection, dayOfWeek: day, periodNumber: period,
+        subject, teacherId,
+      };
+      if (entry) body.id = entry.id;
+      await apiCall('academic-config', { method: 'POST', body });
+      showToast('تم حفظ الحصة بنجاح', 'success');
+      close();
+      await loadAndRenderClassGrid();
+    } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'حفظ'; }
+  });
+
+  if (entry) {
+    document.getElementById('schedFormDeleteBtn').addEventListener('click', async () => {
+      if (!confirm('حذف هذي الحصة نهائياً. هل أنت متأكد؟')) return;
+      try {
+        await apiCall('academic-config', { method: 'POST', body: { action: 'deleteClassScheduleEntry', id: entry.id } });
+        showToast('تم حذف الحصة', 'success');
+        close();
+        await loadAndRenderClassGrid();
+      } catch (e) { showToast(e.message, 'error'); }
+    });
+  }
+}
+
+/* -------------------- تبويب جدول الاختبارات -------------------- */
+
+async function renderExamScheduleTab(area) {
+  const canManage = canManageSchedules();
+  area.innerHTML = `
+    <div id="schedExamFiltersArea"></div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      ${canManage ? `<button type="button" id="addExamBtn">${ICONS.plus()} إضافة اختبار</button>` : ''}
+    </div>
+    <div id="schedExamListArea"></div>`;
+
+  await renderScheduleClassFilters(document.getElementById('schedExamFiltersArea'), loadAndRenderExamList);
+
+  if (canManage) {
+    document.getElementById('addExamBtn').addEventListener('click', () => openExamScheduleForm());
+  }
+}
+
+async function loadAndRenderExamList() {
+  const listArea = document.getElementById('schedExamListArea');
+  listArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let entries;
+  try {
+    entries = await apiCall('academic-config', { method: 'POST', body: { action: 'listExamSchedule' } });
+  } catch (e) { listArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  APP.currentExamScheduleEntries = entries;
+  renderExamScheduleList();
+}
+
+function renderExamScheduleList() {
+  const listArea = document.getElementById('schedExamListArea');
+  const canManage = canManageSchedules();
+  const entries = (APP.currentExamScheduleEntries || []).filter((e) =>
+    e.branch === scheduleFilterBranch && e.stage === scheduleFilterStage && e.grade === scheduleFilterGrade && e.section === scheduleFilterSection)
+    .sort((a, b) => (a.exam_date || '').localeCompare(b.exam_date || '') || a.period_slot.localeCompare(b.period_slot));
+
+  if (!entries.length) { listArea.innerHTML = '<p style="color:#888">لا توجد اختبارات مجدولة لهذا الصف بعد</p>'; return; }
+
+  listArea.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${entries.map((e) => `
+        <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px">
+          <div>
+            <span style="font-size:12.5px;font-weight:700">${formatDateAr(e.exam_date)}</span>
+            <span class="week-type-badge week-type-monthly" style="margin-inline-start:8px">${e.period_slot}</span>
+            <span style="font-size:12px;color:var(--text-muted);margin-inline-start:8px">${escapeHtml(e.subject)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:11.5px;color:var(--text-muted)">مراقب: ${escapeHtml(e.supervisor_name || '—')}</span>
+            ${canManage ? `<button type="button" class="btn-icon-edit" data-edit-exam="${e.id}" title="تعديل">${ICONS.edit()}</button><button type="button" class="btn-icon-delete" data-delete-exam="${e.id}" title="حذف">${ICONS.trash()}</button>` : ''}
+          </div>
+        </div>`).join('')}
+    </div>`;
+
+  if (canManage) {
+    listArea.querySelectorAll('[data-edit-exam]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const entry = entries.find((e) => String(e.id) === btn.getAttribute('data-edit-exam'));
+        if (entry) openExamScheduleForm(entry);
+      });
+    });
+    listArea.querySelectorAll('[data-delete-exam]').forEach((btn) => {
+      btn.addEventListener('click', () => deleteExamScheduleConfirm(btn.getAttribute('data-delete-exam')));
+    });
+  }
+}
+
+async function openExamScheduleForm(entry = null) {
+  let staff;
+  try {
+    staff = await apiCall('academic-config', { method: 'POST', body: { action: 'listStaffForScheduling' } });
+  } catch (e) { showToast(e.message, 'error'); return; }
+  const settings = await getSettingsOnce();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay show';
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:420px">
+      <div class="modal-header">
+        <h3>${entry ? 'تعديل اختبار' : 'إضافة اختبار جديد'}</h3>
+        <button type="button" class="modal-close-btn" id="examFormCloseBtn">${ICONS.close()}</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>المادة</label>
+          <select id="exam_subject">${(settings.subjects || []).map((s) => `<option value="${escapeHtml(s)}" ${entry && entry.subject === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>تاريخ الاختبار</label><input type="date" id="exam_date" value="${entry ? entry.exam_date : ''}"></div>
+        <div class="field"><label>الفترة</label>
+          <select id="exam_period">${EXAM_PERIOD_SLOTS.map((p) => `<option value="${p}" ${entry && entry.period_slot === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
+        </div>
+        <div class="field"><label>مراقب اللجنة</label>
+          <select id="exam_supervisor">${staff.map((s) => `<option value="${s.id}" ${entry && String(entry.supervisor_id) === String(s.id) ? 'selected' : ''}>${escapeHtml(s.name_ar)}</option>`).join('')}</select>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:14px">
+          <button type="button" id="examFormSaveBtn" style="flex:1">حفظ</button>
+          ${entry ? `<button type="button" id="examFormDeleteBtn" class="btn-danger-outline">حذف</button>` : ''}
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+  document.getElementById('examFormCloseBtn').addEventListener('click', close);
+
+  document.getElementById('examFormSaveBtn').addEventListener('click', async () => {
+    const subject = document.getElementById('exam_subject').value;
+    const examDate = document.getElementById('exam_date').value;
+    const periodSlot = document.getElementById('exam_period').value;
+    const supervisorId = document.getElementById('exam_supervisor').value;
+    if (!subject || !examDate || !supervisorId) { showToast('أكمل كل الحقول', 'error'); return; }
+    const btn = document.getElementById('examFormSaveBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    try {
+      const body = {
+        action: 'saveExamScheduleEntry', branch: scheduleFilterBranch, stage: scheduleFilterStage,
+        grade: scheduleFilterGrade, section: scheduleFilterSection, subject, examDate, periodSlot, supervisorId,
+      };
+      if (entry) body.id = entry.id;
+      await apiCall('academic-config', { method: 'POST', body });
+      showToast('تم حفظ الاختبار بنجاح', 'success');
+      close();
+      await loadAndRenderExamList();
+    } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'حفظ'; }
+  });
+
+  if (entry) {
+    document.getElementById('examFormDeleteBtn').addEventListener('click', () => {
+      close();
+      deleteExamScheduleConfirm(entry.id);
+    });
+  }
+}
+
+function deleteExamScheduleConfirm(examId) {
+  if (!confirm('حذف هذا الاختبار نهائياً. هل أنت متأكد؟')) return;
+  (async () => {
+    try {
+      await apiCall('academic-config', { method: 'POST', body: { action: 'deleteExamScheduleEntry', id: examId } });
+      showToast('تم حذف الاختبار', 'success');
+      await loadAndRenderExamList();
     } catch (e) { showToast(e.message, 'error'); }
   })();
 }
