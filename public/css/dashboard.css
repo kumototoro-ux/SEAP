@@ -602,3 +602,6 @@ button:disabled { opacity: .5; cursor: wait; }
   .calendar-day-header { font-size: 10px; padding: 6px 2px; }
   .calendar-event-chip { font-size: 8.5px; padding: 2px 4px; }
 }
+
+/* ---------- 🆕 عرض التقويم الأسبوعي (خلايا أكبر) ---------- */
+.calendar-week-cell { min-height: 130px; padding: 10px; }
