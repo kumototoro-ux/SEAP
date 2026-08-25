@@ -24,7 +24,39 @@ import {
   validateBody, addMatrixEntriesSchema, saveGradeDistForSubjectSchema,
   saveTermSchema, addWeekSchema, updateWeekSchema, toggleTermVisibilitySchema,
   addHolidaySchema, updateHolidaySchema,
+  classScheduleEntrySchema, examScheduleEntrySchema,
 } from '../lib/validation.js';
+
+/* -------------------- 🆕 صلاحيات الجداول الدراسية/الاختبارات (مشتركة) -------------------- */
+// ثلاثة أدوار فقط تملك صلاحية التعديل: الأدمن بلا قيد، مراقب الفروع
+// مقيَّد بفروعه المُسندة (user.allBranches)، مشرف المعلمين مقيَّد بفرعه
+// الوحيد (user.branch). كل الأدوار الأخرى المصرَّح لها بالصفحة (معلم،
+// مشرف طلاب) عرض فقط — لا تصل حتى لإجراءات الكتابة أدناه.
+const SCHEDULE_VIEW_ROLES = ['role_admin', 'role_branch_monitor', 'role_teacher_sup', 'role_student_sup', 'role_teacher'];
+const SCHEDULE_MANAGE_ROLES = ['role_admin', 'role_branch_monitor', 'role_teacher_sup'];
+
+function assertScheduleBranchAccess_(user, branch) {
+  if (user.role === 'role_admin') return;
+  if (user.role === 'role_branch_monitor') {
+    if (!(user.allBranches || []).includes(branch)) {
+      const e = new Error('لا تملك صلاحية التعديل على هذا الفرع');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+  if (user.role === 'role_teacher_sup') {
+    if (user.branch !== branch) {
+      const e = new Error('لا تملك صلاحية التعديل على هذا الفرع');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+  const e = new Error('لا تملك صلاحية تنفيذ هذا الإجراء');
+  e.statusCode = 403;
+  throw e;
+}
 
 /* -------------------- 🆕 تحسينات أمان/تكامل بيانات مشتركة -------------------- */
 // (1) أي أسبوع أو إجازة يجب أن تقع تواريخه ضمن نطاق فصله الدراسي بالضبط —
@@ -423,6 +455,192 @@ async function handleListCalendarData(req, res) {
   return res.status(200).json({ success: true, data: { terms: terms || [], weeks, holidays } });
 }
 
+/* -------------------- 🆕 الجدول الدراسي الأسبوعي -------------------- */
+
+/** 🆕 قائمة موظفين مبسَّطة للاختيار (معلم بالجدول / مراقب لجنة بالاختبار)
+ * — بيانات دنيا فقط (بلا هوية وطنية أو حقول حساسة)، مقيَّدة بنفس فروع
+ * صلاحية المستخدم (لا PII يتسرَّب لغير الأدمن). */
+async function handleListStaffForScheduling(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_MANAGE_ROLES); // 🆕 القائمة تُستخدَم فقط بنماذج الإضافة/التعديل (أدوار الإدارة)
+
+  let query = supabaseAdmin.from('employees').select('id, name_ar, role, branch').is('deleted_at', null).order('name_ar');
+  if (user.role === 'role_branch_monitor') query = query.in('branch', user.allBranches || []);
+  else if (user.role === 'role_teacher_sup') query = query.eq('branch', user.branch);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleListClassSchedule(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_VIEW_ROLES);
+
+  let query = supabaseAdmin.from('class_schedule_slots').select('*').order('day_of_week').order('period_number');
+  if (user.role === 'role_branch_monitor') query = query.in('branch', user.allBranches || []);
+  else if (user.role === 'role_teacher_sup' || user.role === 'role_student_sup') query = query.eq('branch', user.branch);
+  else if (user.role === 'role_teacher') query = query.eq('teacher_id', user.id); // 🆕 المعلم يشوف حصصه هو فقط
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleSaveClassScheduleEntry(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_MANAGE_ROLES);
+  const d = validateBody(classScheduleEntrySchema, req.body);
+  assertScheduleBranchAccess_(user, d.branch);
+
+  // 🆕 نجلب اسم المعلم لحظة الحفظ ونخزّنه مكرَّراً بالخانة (Denormalization)
+  // — يسمح لأدوار العرض فقط برؤية الاسم بلا صلاحية جلب قائمة الموظفين كاملة
+  const { data: teacher, error: teacherError } = await supabaseAdmin.from('employees').select('name_ar').eq('id', d.teacherId).single();
+  if (teacherError || !teacher) {
+    const e = new Error('المعلم المحدَّد غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const row = {
+    branch: d.branch, stage: d.stage, grade: d.grade, section: d.section,
+    day_of_week: d.dayOfWeek, period_number: d.periodNumber, subject: d.subject,
+    teacher_id: d.teacherId, teacher_name: teacher.name_ar,
+  };
+
+  let savedId = d.id;
+  if (d.id) {
+    const { error } = await supabaseAdmin.from('class_schedule_slots').update(row).eq('id', d.id);
+    if (error) throw error;
+  } else {
+    const { data: inserted, error } = await supabaseAdmin.from('class_schedule_slots').insert(row).select('id').single();
+    if (error) {
+      // 🆕 قيد UNIQUE بقاعدة البيانات يمنع تضارب حصتين — رسالة عربية واضحة بدل خطأ تقني
+      if (error.code === '23505') {
+        const e = new Error('يوجد بالفعل حصة أخرى مسجَّلة بنفس اليوم ورقم الحصة لهذا الصف — عدّل الحصة الموجودة بدل الإضافة');
+        e.statusCode = 409;
+        throw e;
+      }
+      throw error;
+    }
+    savedId = inserted.id;
+  }
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: d.id ? 'تعديل حصة بالجدول الدراسي' : 'إضافة حصة بالجدول الدراسي',
+    details: { id: savedId, branch: d.branch, grade: d.grade, section: d.section, dayOfWeek: d.dayOfWeek, periodNumber: d.periodNumber },
+    branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: { id: savedId } });
+}
+
+async function handleDeleteClassScheduleEntry(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_MANAGE_ROLES);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: existing, error: fetchError } = await supabaseAdmin.from('class_schedule_slots').select('branch').eq('id', id).single();
+  if (fetchError || !existing) {
+    const e = new Error('الحصة غير موجودة');
+    e.statusCode = 404;
+    throw e;
+  }
+  assertScheduleBranchAccess_(user, existing.branch);
+
+  const { error } = await supabaseAdmin.from('class_schedule_slots').delete().eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف حصة بالجدول الدراسي', details: { id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- 🆕 جدول الاختبارات -------------------- */
+
+async function handleListExamSchedule(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_VIEW_ROLES);
+
+  let query = supabaseAdmin.from('exam_committee_schedule').select('*').order('exam_date').order('period_slot');
+  if (user.role === 'role_branch_monitor') query = query.in('branch', user.allBranches || []);
+  else if (user.role === 'role_teacher_sup' || user.role === 'role_student_sup') query = query.eq('branch', user.branch);
+  else if (user.role === 'role_teacher') query = query.eq('supervisor_id', user.id); // 🆕 المعلم يشوف لجانه هو فقط
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleSaveExamScheduleEntry(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_MANAGE_ROLES);
+  const d = validateBody(examScheduleEntrySchema, req.body);
+  assertScheduleBranchAccess_(user, d.branch);
+
+  const { data: supervisor, error: supervisorError } = await supabaseAdmin.from('employees').select('name_ar').eq('id', d.supervisorId).single();
+  if (supervisorError || !supervisor) {
+    const e = new Error('المراقب المحدَّد غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const row = {
+    branch: d.branch, stage: d.stage, grade: d.grade, section: d.section, subject: d.subject,
+    exam_date: d.examDate, period_slot: d.periodSlot, supervisor_id: d.supervisorId, supervisor_name: supervisor.name_ar,
+  };
+
+  let savedId = d.id;
+  if (d.id) {
+    const { error } = await supabaseAdmin.from('exam_committee_schedule').update(row).eq('id', d.id);
+    if (error) throw error;
+  } else {
+    const { data: inserted, error } = await supabaseAdmin.from('exam_committee_schedule').insert(row).select('id').single();
+    if (error) {
+      if (error.code === '23505') {
+        const e = new Error('يوجد بالفعل اختبار آخر مسجَّل بنفس التاريخ والفترة لهذا الصف — عدّل الاختبار الموجود بدل الإضافة');
+        e.statusCode = 409;
+        throw e;
+      }
+      throw error;
+    }
+    savedId = inserted.id;
+  }
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: d.id ? 'تعديل جدولة اختبار' : 'إضافة جدولة اختبار',
+    details: { id: savedId, branch: d.branch, grade: d.grade, section: d.section, examDate: d.examDate, periodSlot: d.periodSlot },
+    branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: { id: savedId } });
+}
+
+async function handleDeleteExamScheduleEntry(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, SCHEDULE_MANAGE_ROLES);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: existing, error: fetchError } = await supabaseAdmin.from('exam_committee_schedule').select('branch').eq('id', id).single();
+  if (fetchError || !existing) {
+    const e = new Error('الاختبار غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  assertScheduleBranchAccess_(user, existing.branch);
+
+  const { error } = await supabaseAdmin.from('exam_committee_schedule').delete().eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف جدولة اختبار', details: { id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
 export default createRouter({
   listMatrix: handleListMatrix,
   addMatrixEntries: handleAddMatrixEntries,
@@ -443,4 +661,11 @@ export default createRouter({
   updateHoliday: handleUpdateHoliday,
   deleteHoliday: handleDeleteHoliday,
   listCalendarData: handleListCalendarData,
+  listStaffForScheduling: handleListStaffForScheduling,
+  listClassSchedule: handleListClassSchedule,
+  saveClassScheduleEntry: handleSaveClassScheduleEntry,
+  deleteClassScheduleEntry: handleDeleteClassScheduleEntry,
+  listExamSchedule: handleListExamSchedule,
+  saveExamScheduleEntry: handleSaveExamScheduleEntry,
+  deleteExamScheduleEntry: handleDeleteExamScheduleEntry,
 });
