@@ -423,5 +423,6 @@ export default createRouter({
   getEvaluation: handleGetEvaluation,
   saveEvaluation: handleSaveEvaluation,
   deleteEvaluation: handleDeleteEvaluation,
+  generateReport: handleGenerateReport,
   dashboardStats: handleDashboardStats,
 });
