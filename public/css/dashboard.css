@@ -535,3 +535,22 @@ button:disabled { opacity: .5; cursor: wait; }
   padding: 8px 16px; border-radius: 999px; cursor: pointer;
 }
 .segmented-item.active { background: var(--primary); color: #fff; }
+
+/* ---------- 🆕 التقويم الدراسي ---------- */
+.term-card-hidden { opacity: 0.6; }
+.term-visibility-toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; border: none; cursor: pointer; flex-shrink: 0; white-space: nowrap;
+}
+.term-visibility-toggle.is-visible { background: #E7F5EC; color: #2F7A4D; }
+.term-visibility-toggle.is-hidden { background: var(--surface); color: var(--text-muted); }
+.term-visibility-toggle:hover { filter: brightness(0.96); }
+
+.week-type-badge {
+  display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 999px;
+  font-size: 10.5px; font-weight: 700; flex-shrink: 0;
+}
+.week-type-study   { background: var(--accent-green);  color: #204d31; }
+.week-type-holiday { background: var(--outline);        color: var(--text-muted); }
+.week-type-monthly { background: var(--accent-orange); color: #7a4b00; }
+.week-type-final   { background: #FBEAE8;               color: #C4483A; }
