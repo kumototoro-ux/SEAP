@@ -3,9 +3,15 @@
 // إجراءات: listMatrix, addMatrixEntries (مواد متعددة دفعة واحدة),
 // deleteMatrixEntry، listGradeDist, saveGradeDistForSubject (يستبدل كل
 // توزيع مادة معيّنة دفعة واحدة — بطاقة ذكية بالواجهة)، deleteGradeDist.
-// 🆕 التقويم الدراسي: listTerms, saveTerm (إضافة/تعديل فصل + توليد
-// أسابيعه تلقائياً)، deleteTerm، listWeeksForTerm، updateWeek (نوع
-// الأسبوع + تسمية)، toggleTermVisibility (إظهار/إخفاء فصل لكل الموظفين).
+// 🆕 التقويم الدراسي (إدارة — أدمن فقط): listTerms, saveTerm (فصل بلا
+// أي توليد تلقائي للأسابيع)، deleteTerm، listWeeksForTerm، addWeek،
+// updateWeek، deleteWeek (كل أسبوع يُضاف/يُعدَّل يدوياً بالكامل — تاريخ
+// بداية/نهاية/نوع/تسمية يحدّدها الأدمن بنفسه)، toggleTermVisibility
+// (إظهار/إخفاء فصل كامل لكل الموظفين).
+// 🆕 listCalendarData: نقطة القراءة الوحيدة لصفحة "التقويم الدراسي"
+// بالواجهة (عرض فقط للجميع بلا استثناء، حتى الأدمن) — تُرجِع فقط
+// الفصول الظاهرة (is_visible = true) وأسابيعها، بلا أي فلترة إضافية
+// بالواجهة (الأمان الحقيقي هنا بمستوى الاستعلام).
 // ⚠️ ملف مُجمَّع بسبب حد الـ12 دالة خادمة بخطة Vercel Hobby — أي ميزة
 // جديدة تُضاف هنا كإجراء (action) جديد، لا كملف مستقل.
 // =====================================================================
@@ -14,7 +20,10 @@ import { supabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth, requireRole } from '../lib/auth.js';
 import { createRouter } from '../lib/router.js';
 import { z } from 'zod';
-import { validateBody, addMatrixEntriesSchema, saveGradeDistForSubjectSchema, saveTermSchema, updateWeekSchema, toggleTermVisibilitySchema } from '../lib/validation.js';
+import {
+  validateBody, addMatrixEntriesSchema, saveGradeDistForSubjectSchema,
+  saveTermSchema, addWeekSchema, updateWeekSchema, toggleTermVisibilitySchema,
+} from '../lib/validation.js';
 
 /* -------------------- مصفوفة توزيع المواد -------------------- */
 async function handleListMatrix(req, res) {
@@ -112,63 +121,12 @@ async function handleDeleteGradeDist(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
-/* -------------------- 🆕 التقويم الدراسي -------------------- */
-
-/** يولّد أسابيع 7 أيام بين تاريخي بداية/نهاية الفصل — نفس منطق GAS الأصلي بالضبط */
-function generateWeeksBetween_(startDate, endDate) {
-  const weeks = [];
-  let cursor = new Date(startDate);
-  const end = new Date(endDate);
-  let weekNumber = 1;
-  while (cursor <= end) {
-    const weekStart = new Date(cursor);
-    const weekEnd = new Date(cursor);
-    weekEnd.setDate(weekEnd.getDate() + 6);
-    if (weekEnd > end) weekEnd.setTime(end.getTime());
-    weeks.push({
-      week_number: weekNumber,
-      label: `الأسبوع ${weekNumber}`,
-      start_date: weekStart.toISOString().slice(0, 10),
-      end_date: weekEnd.toISOString().slice(0, 10),
-    });
-    cursor.setDate(cursor.getDate() + 7);
-    weekNumber++;
-  }
-  return weeks;
-}
-
-// 🆕 القراءة (listTerms/listWeeksForTerm) متاحة لكل الأدوار المصرَّح لها بصفحة
-// "التقويم الدراسي" بالواجهة (كل الأدوار بحسب خارطة الصلاحيات) — فقط requireAuth
-// بلا requireRole. الكتابة (saveTerm/deleteTerm/updateWeek/toggleTermVisibility) للأدمن فقط.
-// 🆕 الأدمن فقط يرى الفصول المخفية (is_visible = false) — باقي الأدوار لا تستقبلها
-// إطلاقاً من الخادم (لا فلترة بالواجهة فقط، حماية حقيقية على مستوى الاستعلام).
+/* -------------------- 🆕 التقويم الدراسي: إدارة الفصول (أدمن فقط) -------------------- */
 
 async function handleListTerms(req, res) {
   const user = requireAuth(req);
-  let query = supabaseAdmin.from('academic_terms').select('*').order('academic_year', { ascending: false }).order('term_number', { ascending: true });
-  if (user.role !== 'role_admin') query = query.eq('is_visible', true);
-  const { data, error } = await query;
-  if (error) throw error;
-  return res.status(200).json({ success: true, data });
-}
-
-async function handleListWeeksForTerm(req, res) {
-  const user = requireAuth(req);
-  const { termId } = validateBody(z.object({ termId: z.union([z.string(), z.number()]) }), req.body);
-
-  // 🆕 حماية دفاعية: لو الفصل مخفي والمستخدم ليس أدمن، نمنع الوصول حتى لو
-  // استُدعيت الدالة مباشرة بمعزل عن قائمة listTerms (لا اعتماد على فلترة الواجهة فقط)
-  if (user.role !== 'role_admin') {
-    const { data: term, error: termError } = await supabaseAdmin.from('academic_terms').select('is_visible').eq('id', termId).single();
-    if (termError) throw termError;
-    if (!term || term.is_visible === false) {
-      const e = new Error('هذا الفصل الدراسي غير متاح حالياً');
-      e.statusCode = 403;
-      throw e;
-    }
-  }
-
-  const { data, error } = await supabaseAdmin.from('academic_weeks').select('*').eq('term_id', termId).order('week_number', { ascending: true });
+  requireRole(user, ['role_admin']); // 🆕 إدارة الفصول أداة أدمن حصرية — القراءة العامة تمر عبر listCalendarData
+  const { data, error } = await supabaseAdmin.from('academic_terms').select('*').order('academic_year', { ascending: false }).order('term_number', { ascending: true });
   if (error) throw error;
   return res.status(200).json({ success: true, data });
 }
@@ -178,21 +136,16 @@ async function handleSaveTerm(req, res) {
   requireRole(user, ['role_admin']);
   const d = validateBody(saveTermSchema, req.body);
 
-  const weeks = generateWeeksBetween_(d.startDate, d.endDate);
+  // 🆕 لا يوجد أي توليد تلقائي للأسابيع هنا — الأسابيع تُدار يدوياً بالكامل
+  // بإجراءات addWeek/updateWeek/deleteWeek المستقلة تماماً عن هذا الإجراء
   let termId = d.id;
-
   if (termId) {
-    // 🆕 تعديل فصل موجود: نحدّث بياناته، ونحذف كل أسابيعه القديمة لنعيد توليدها من الصفر
     const { error: updateError } = await supabaseAdmin.from('academic_terms').update({
       name: d.name, term_number: d.termNumber, academic_year: d.academicYear,
       start_date: d.startDate, end_date: d.endDate,
     }).eq('id', termId);
     if (updateError) throw updateError;
-
-    const { error: deleteWeeksError } = await supabaseAdmin.from('academic_weeks').delete().eq('term_id', termId);
-    if (deleteWeeksError) throw deleteWeeksError;
   } else {
-    // 🆕 إضافة فصل جديد
     const { data: inserted, error: insertError } = await supabaseAdmin.from('academic_terms').insert({
       name: d.name, term_number: d.termNumber, academic_year: d.academicYear,
       start_date: d.startDate, end_date: d.endDate,
@@ -201,20 +154,14 @@ async function handleSaveTerm(req, res) {
     termId = inserted.id;
   }
 
-  if (weeks.length) {
-    const weekRows = weeks.map((w) => ({ ...w, term_id: termId }));
-    const { error: weeksInsertError } = await supabaseAdmin.from('academic_weeks').insert(weekRows);
-    if (weeksInsertError) throw weeksInsertError;
-  }
-
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
     action: d.id ? 'تعديل فصل دراسي' : 'إضافة فصل دراسي',
-    details: { termId, name: d.name, academicYear: d.academicYear, weeksGenerated: weeks.length },
+    details: { termId, name: d.name, academicYear: d.academicYear },
     branch: user.branch,
   });
 
-  return res.status(200).json({ success: true, data: { id: termId, weeksGenerated: weeks.length } });
+  return res.status(200).json({ success: true, data: { id: termId } });
 }
 
 async function handleDeleteTerm(req, res) {
@@ -237,21 +184,6 @@ async function handleDeleteTerm(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
-async function handleUpdateWeek(req, res) {
-  const user = requireAuth(req);
-  requireRole(user, ['role_admin']);
-  const d = validateBody(updateWeekSchema, req.body);
-
-  const { error } = await supabaseAdmin.from('academic_weeks').update({ label: d.label, week_type: d.weekType }).eq('id', d.id);
-  if (error) throw error;
-
-  await supabaseAdmin.from('audit_log').insert({
-    emp_id: user.id, emp_name: user.fullName, role: user.role,
-    action: 'تعديل أسبوع دراسي', details: { id: d.id, label: d.label, weekType: d.weekType }, branch: user.branch,
-  });
-  return res.status(200).json({ success: true, data: true });
-}
-
 async function handleToggleTermVisibility(req, res) {
   const user = requireAuth(req);
   requireRole(user, ['role_admin']);
@@ -268,6 +200,93 @@ async function handleToggleTermVisibility(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/* -------------------- 🆕 التقويم الدراسي: إدارة الأسابيع يدوياً (أدمن فقط) -------------------- */
+
+async function handleListWeeksForTerm(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']); // 🆕 أداة إدارة داخل الإعدادات فقط — القراءة العامة عبر listCalendarData
+  const { termId } = validateBody(z.object({ termId: z.union([z.string(), z.number()]) }), req.body);
+  const { data, error } = await supabaseAdmin.from('academic_weeks').select('*').eq('term_id', termId).order('week_number', { ascending: true });
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleAddWeek(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const d = validateBody(addWeekSchema, req.body);
+
+  const { data: inserted, error } = await supabaseAdmin.from('academic_weeks').insert({
+    term_id: d.termId, week_number: d.weekNumber, label: d.label,
+    week_type: d.weekType, start_date: d.startDate, end_date: d.endDate,
+  }).select('id').single();
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'إضافة أسبوع دراسي', details: { id: inserted.id, termId: d.termId, weekNumber: d.weekNumber, weekType: d.weekType }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: { id: inserted.id } });
+}
+
+async function handleUpdateWeek(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const d = validateBody(updateWeekSchema, req.body);
+
+  const { error } = await supabaseAdmin.from('academic_weeks').update({
+    week_number: d.weekNumber, label: d.label, week_type: d.weekType,
+    start_date: d.startDate, end_date: d.endDate,
+  }).eq('id', d.id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'تعديل أسبوع دراسي', details: { id: d.id, weekNumber: d.weekNumber, weekType: d.weekType }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+async function handleDeleteWeek(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { error } = await supabaseAdmin.from('academic_weeks').delete().eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف أسبوع دراسي', details: { id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- 🆕 التقويم الدراسي: نقطة العرض العامة (كل الأدوار، بلا استثناء) -------------------- */
+
+/** يُرجِع فقط الفصول الظاهرة (is_visible = true) وأسابيعها — لكل مستخدم
+ * مسجَّل دخول بغض النظر عن دوره (حتى الأدمن يرى بالضبط ما يراه الجميع
+ * بصفحة العرض، بما إنه هو من يتحكّم بالإظهار من الإعدادات أصلاً). */
+async function handleListCalendarData(req, res) {
+  requireAuth(req);
+
+  const { data: terms, error: termsError } = await supabaseAdmin
+    .from('academic_terms').select('*').eq('is_visible', true)
+    .order('academic_year', { ascending: false }).order('term_number', { ascending: true });
+  if (termsError) throw termsError;
+
+  const visibleTermIds = (terms || []).map((t) => t.id);
+  let weeks = [];
+  if (visibleTermIds.length) {
+    const { data: weeksData, error: weeksError } = await supabaseAdmin
+      .from('academic_weeks').select('*').in('term_id', visibleTermIds).order('week_number', { ascending: true });
+    if (weeksError) throw weeksError;
+    weeks = weeksData || [];
+  }
+
+  return res.status(200).json({ success: true, data: { terms: terms || [], weeks } });
+}
+
 export default createRouter({
   listMatrix: handleListMatrix,
   addMatrixEntries: handleAddMatrixEntries,
@@ -276,9 +295,12 @@ export default createRouter({
   saveGradeDistForSubject: handleSaveGradeDistForSubject,
   deleteGradeDist: handleDeleteGradeDist,
   listTerms: handleListTerms,
-  listWeeksForTerm: handleListWeeksForTerm,
   saveTerm: handleSaveTerm,
   deleteTerm: handleDeleteTerm,
-  updateWeek: handleUpdateWeek,
   toggleTermVisibility: handleToggleTermVisibility,
+  listWeeksForTerm: handleListWeeksForTerm,
+  addWeek: handleAddWeek,
+  updateWeek: handleUpdateWeek,
+  deleteWeek: handleDeleteWeek,
+  listCalendarData: handleListCalendarData,
 });
