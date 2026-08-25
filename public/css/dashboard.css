@@ -556,6 +556,10 @@ button:disabled { opacity: .5; cursor: wait; }
 .week-type-final   { background: #FBEAE8;               color: #C4483A; }
 
 /* ---------- 🆕 شبكة التقويم الدراسي الشهري ---------- */
+@keyframes calendarFadeSlide {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 .calendar-toolbar {
   display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;
   margin: 14px 0 18px;
@@ -564,13 +568,19 @@ button:disabled { opacity: .5; cursor: wait; }
 .calendar-nav-btn {
   width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--outline); background: var(--surface-card);
   display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--primary); flex-shrink: 0;
+  transition: background 0.15s ease, transform 0.15s ease;
 }
-.calendar-nav-btn:hover { background: var(--surface); }
-.calendar-month-label { font-weight: 800; font-size: 16px; min-width: 150px; text-align: center; }
+.calendar-nav-btn:hover { background: var(--surface); transform: scale(1.08); }
+.calendar-nav-btn:active { transform: scale(0.92); }
+.calendar-month-label {
+  font-weight: 800; font-size: 16px; min-width: 150px; text-align: center; display: inline-block;
+  animation: calendarFadeSlide 0.25s ease;
+}
 
 .calendar-grid {
   display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px;
   background: var(--outline); border: 1px solid var(--outline); border-radius: var(--radius-sm); overflow: hidden;
+  animation: calendarFadeSlide 0.28s ease;
 }
 .calendar-day-header {
   background: var(--surface); text-align: center; font-size: 11.5px; font-weight: 800; color: var(--text-muted);
@@ -578,7 +588,7 @@ button:disabled { opacity: .5; cursor: wait; }
 }
 .calendar-cell {
   background: var(--surface-card); min-height: 78px; padding: 6px; display: flex; flex-direction: column; gap: 4px;
-  position: relative;
+  position: relative; transition: background 0.15s ease;
 }
 .calendar-cell-outside { background: var(--surface); opacity: 0.55; }
 .calendar-cell-today .calendar-cell-daynum {
@@ -593,6 +603,21 @@ button:disabled { opacity: .5; cursor: wait; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
+/* 🆕 مظهر "مبهر" للإجازة — يُلاحَظ فوراً بلمحة بصر بلا حاجة لقراءة النص */
+@keyframes holidayGlow {
+  0%, 100% { box-shadow: 0 2px 6px rgba(255, 138, 101, 0.35); }
+  50% { box-shadow: 0 2px 12px rgba(255, 138, 101, 0.65); }
+}
+.calendar-cell-holiday {
+  background: linear-gradient(160deg, #FFF3E0 0%, #FFE0B2 100%) !important;
+}
+.calendar-cell-holiday .calendar-cell-daynum { color: #B8621B; }
+.calendar-event-chip.calendar-chip-holiday {
+  background: linear-gradient(135deg, #FFB74D 0%, #FF7043 100%);
+  color: #fff; font-weight: 800; letter-spacing: 0.2px;
+  animation: holidayGlow 2.2s ease-in-out infinite;
+}
+
 .calendar-legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 16px; }
 .calendar-legend-item { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); font-weight: 600; }
 .calendar-legend-dot { width: 10px; height: 10px; border-radius: 999px; display: inline-block; }
@@ -605,3 +630,25 @@ button:disabled { opacity: .5; cursor: wait; }
 
 /* ---------- 🆕 عرض التقويم الأسبوعي (خلايا أكبر) ---------- */
 .calendar-week-cell { min-height: 130px; padding: 10px; }
+
+/* ---------- 🆕 جدول الحصص الدراسية ---------- */
+.schedule-grid-wrap { overflow-x: auto; border: 1px solid var(--outline); border-radius: var(--radius-sm); }
+.schedule-table { width: 100%; border-collapse: collapse; min-width: 600px; }
+.schedule-table th {
+  background: var(--surface); font-size: 11.5px; font-weight: 800; color: var(--text-muted);
+  padding: 10px 6px; text-align: center; border-bottom: 1px solid var(--outline);
+}
+.schedule-period-label {
+  font-size: 11px; font-weight: 700; color: var(--text-muted); text-align: center; white-space: nowrap;
+  padding: 8px; background: var(--surface); border-inline-end: 1px solid var(--outline);
+}
+.schedule-cell {
+  border: 1px solid var(--outline); text-align: center; padding: 8px 6px; min-width: 90px; vertical-align: middle;
+}
+.schedule-cell-clickable { cursor: pointer; transition: background 0.15s ease; }
+.schedule-cell-clickable:hover { background: var(--surface); }
+.schedule-cell-filled { background: var(--accent-purple); }
+.schedule-cell-subject { font-size: 11.5px; font-weight: 800; }
+.schedule-cell-teacher { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.schedule-cell-add { color: var(--text-muted); font-size: 16px; font-weight: 700; opacity: 0.45; }
+.schedule-cell-clickable:hover .schedule-cell-add { opacity: 0.9; }
