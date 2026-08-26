@@ -22,13 +22,17 @@ function toggleGlobalLoading(active) {
  * @param {object} options - { method, body, requiresAuth }
  */
 async function apiCall(endpoint, options = {}) {
-  const { method = 'GET', body = null, requiresAuth = true } = options;
+  const { method = 'GET', body = null, requiresAuth = true, authToken = null } = options;
 
   toggleGlobalLoading(true);
   try {
     const headers = { 'Content-Type': 'application/json' };
     if (requiresAuth) {
-      const token = localStorage.getItem('mirqat_token');
+      // 🆕 authToken: يسمح بتمرير توكن صراحة (بدل الاعتماد الحصري على
+      // localStorage) — ضروري لمسار "أول دخول" حيث لا يجب حفظ التوكن
+      // بالتخزين المحلي إلا بعد نجاح تغيير كلمة المرور الإجباري فعلياً
+      // (انظر renderForceChangePassword بملف app.js لتفاصيل الثغرة الأمنية).
+      const token = authToken || localStorage.getItem('mirqat_token');
       if (!token) {
         handleSessionExpired();
         throw new Error('الجلسة غير موجودة');
