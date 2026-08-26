@@ -56,12 +56,32 @@ async function recomputeGradeAggregation_(studentId, subject) {
     .eq('student_id', studentId).eq('assignments.subject', subject);
   if (gError) throw gError;
 
+  // 🆕 سجل المشاركة والتفاعل — يُستخدَم فقط للأنواع اللي بلا أي تكاليف/اختبارات مرتبطة بها
+  // (يمنع الاحتساب المزدوج لنفس نوع التقييم من مصدرين معاً)
+  const { data: participation, error: pError } = await supabaseAdmin.from('participation_log').select('eval_type, direction').eq('student_id', studentId).eq('subject', subject);
+  if (pError) throw pError;
+
   const breakdown = distRows.map((dist) => {
     const relevant = (grades || []).filter((g) => g.assignments.eval_type === dist.eval_type && g.score !== null);
     const earned = relevant.reduce((sum, g) => sum + Number(g.score), 0);
     const possible = relevant.reduce((sum, g) => sum + Number(g.max_score || 0), 0);
-    const contribution = possible > 0 ? (earned / possible) * Number(dist.max_grade) : 0;
-    return { evalType: dist.eval_type, earned, possible, weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100 };
+
+    if (possible > 0) {
+      const contribution = (earned / possible) * Number(dist.max_grade);
+      return { evalType: dist.eval_type, source: 'assignments', earned, possible, weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100 };
+    }
+
+    // 🆕 لا توجد تكاليف بهذا النوع — نجرّب المشاركة والتفاعل (معادلة نسبية: إيجابي مقابل سلبي)
+    const relevantParticipation = (participation || []).filter((p) => p.eval_type === dist.eval_type);
+    const positiveCount = relevantParticipation.filter((p) => p.direction === 'positive').length;
+    const negativeCount = relevantParticipation.filter((p) => p.direction === 'negative').length;
+    const total = positiveCount + negativeCount;
+    const ratio = total > 0 ? positiveCount / total : 0;
+    const contribution = ratio * Number(dist.max_grade);
+    return {
+      evalType: dist.eval_type, source: 'participation', positiveCount, negativeCount,
+      weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100,
+    };
   });
 
   const finalGrade = Math.round(breakdown.reduce((sum, b) => sum + b.contribution, 0) * 100) / 100;
@@ -729,13 +749,27 @@ async function handleListAssignments(req, res) {
   // 🆕 عدّاد الطلاب المتفاعلين (لبطاقات المشرفين) — نجلب الدرجات المرتبطة ونُجمِّعها بالجافاسكربت
   const ids = (assignments || []).map((a) => a.id);
   let counts = {};
+  let questionsByAssignment = {};
   if (ids.length) {
     const { data: grades, error: gradesError } = await supabaseAdmin.from('assignment_grades').select('assignment_id').in('assignment_id', ids);
     if (gradesError) throw gradesError;
     (grades || []).forEach((g) => { counts[g.assignment_id] = (counts[g.assignment_id] || 0) + 1; });
+
+    // 🆕 يحدّد هل التكليف قابل للتصحيح التلقائي بالكامل (كل أسئلته خيارات/صح وخطأ)
+    // أو يحتاج تصحيح يدوي (فيه سؤال واحد على الأقل إجابة قصيرة/طويلة/مرفق)
+    const { data: questions, error: qError } = await supabaseAdmin.from('assignment_questions').select('assignment_id, answer_type').in('assignment_id', ids);
+    if (qError) throw qError;
+    (questions || []).forEach((q) => {
+      if (!questionsByAssignment[q.assignment_id]) questionsByAssignment[q.assignment_id] = [];
+      questionsByAssignment[q.assignment_id].push(q.answer_type);
+    });
   }
 
-  const enriched = (assignments || []).map((a) => ({ ...a, participants_count: counts[a.id] || 0 }));
+  const enriched = (assignments || []).map((a) => {
+    const qTypes = questionsByAssignment[a.id] || [];
+    const isAutoGradable = qTypes.length > 0 && qTypes.every((t) => t === 'mcq' || t === 'true_false');
+    return { ...a, participants_count: counts[a.id] || 0, is_auto_gradable: isAutoGradable };
+  });
   return res.status(200).json({ success: true, data: enriched });
 }
 
@@ -849,6 +883,41 @@ async function handleDeleteAssignment(req, res) {
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
     action: 'حذف تكليف/اختبار/إثراء', details: { id }, branch: user.branch,
+  });
+  return res.status(200).json({ success: true, data: true });
+}
+
+/** 🆕 تحديث الدرجة الكلية مباشرة (مثال: "الاختبار الورقي من 20") — بلا
+ * حاجة لإعادة بناء الأسئلة. مفيد للتقييمات الورقية/الخارجية التي أُنشئت
+ * بسؤال واحد تمثيلي داخل النظام. */
+async function handleUpdateAssignmentMaxScore(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ASSIGNMENT_WRITE_ROLES);
+  const { id, maxScore } = validateBody(z.object({
+    id: z.union([z.string(), z.number()]), maxScore: z.number().positive('الدرجة الكلية يجب أن تكون أكبر من صفر').max(1000),
+  }), req.body);
+
+  const { data: existing, error: fetchError } = await supabaseAdmin.from('assignments').select('teacher_id, published_at').eq('id', id).single();
+  if (fetchError || !existing) {
+    const e = new Error('التكليف غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role !== 'role_admin') {
+    if (existing.teacher_id !== user.id) {
+      const e = new Error('لا تملك صلاحية تعديل تكليف معلم آخر');
+      e.statusCode = 403;
+      throw e;
+    }
+    assertWithinWindow_(existing.published_at, ASSIGNMENT_EDIT_WINDOW_MS, 'تعديل التكليف');
+  }
+
+  const { error } = await supabaseAdmin.from('assignments').update({ max_score: maxScore, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'تعديل الدرجة الكلية لتكليف', details: { id, maxScore }, branch: user.branch,
   });
   return res.status(200).json({ success: true, data: true });
 }
@@ -979,6 +1048,92 @@ async function handleDeleteAssignmentGrade(req, res) {
     action: 'حذف رصد درجة تكليف', details: { assignmentId, studentId }, branch: user.branch,
   });
   await recomputeGradeAggregation_(studentId, existingGrade.assignments.subject); // 🆕 إعادة حساب فورية بعد الحذف
+  return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- 🆕 المشاركة والتفاعل (سجل تراكمي مستقل عن التكاليف) -------------------- */
+// كل قيد "إشارة" فقط (إيجابي/سلبي) — لا قيمة رقمية حرة. الدرجة المستحقة
+// تُحسَب بمعادلة نسبية (إيجابي ÷ إجمالي) مُرجَّحة بوزن "المشاركة والتفاعل"
+// المُعرَّف بتوزيع الدرجات — تلقائياً ضمن recomputeGradeAggregation_.
+
+async function handleAddParticipationEntry(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const d = validateBody(z.object({
+    studentId: z.string().min(1), subject: z.string().trim().min(1), evalType: z.string().trim().min(1),
+    direction: z.enum(['positive', 'negative']), note: z.string().trim().max(300).optional().nullable(),
+  }), req.body);
+
+  const { data: student, error: sError } = await supabaseAdmin.from('students').select('*').eq('id', d.studentId).single();
+  if (sError || !student) {
+    const e = new Error('الطالب غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role === 'role_teacher') {
+    const inScope = user.branch === student.branch && (user.grades || []).includes(student.grade) && (user.sections || []).includes(student.section) && (user.subject || []).includes(d.subject);
+    if (!inScope) {
+      const e = new Error('لا تملك صلاحية تسجيل مشاركة لهذا الطالب/المادة');
+      e.statusCode = 403;
+      throw e;
+    }
+  }
+
+  const { error } = await supabaseAdmin.from('participation_log').insert({
+    student_id: student.id, student_name: student.name_ar, subject: d.subject, eval_type: d.evalType,
+    branch: student.branch, stage: student.stage, grade: student.grade, section: student.section,
+    direction: d.direction, note: d.note || null, recorded_by: user.id, recorded_by_name: user.fullName,
+  });
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: d.direction === 'positive' ? 'تسجيل مشاركة إيجابية' : 'تسجيل مشاركة سلبية',
+    details: { studentId: d.studentId, subject: d.subject, evalType: d.evalType }, branch: user.branch,
+  });
+  await recomputeGradeAggregation_(d.studentId, d.subject); // 🆕 إعادة حساب فورية
+  return res.status(200).json({ success: true, data: true });
+}
+
+async function handleListParticipationLog(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const { studentId, subject } = validateBody(z.object({ studentId: z.string().min(1), subject: z.string().trim().min(1) }), req.body);
+
+  const { data, error } = await supabaseAdmin.from('participation_log').select('*')
+    .eq('student_id', studentId).eq('subject', subject).order('recorded_at', { ascending: false });
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleDeleteParticipationEntry(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const { id } = validateBody(z.object({ id: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: existing, error: fetchError } = await supabaseAdmin.from('participation_log').select('*').eq('id', id).single();
+  if (fetchError || !existing) {
+    const e = new Error('القيد غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (user.role !== 'role_admin') {
+    if (existing.recorded_by !== user.id) {
+      const e = new Error('لا تملك صلاحية حذف قيد معلم آخر');
+      e.statusCode = 403;
+      throw e;
+    }
+    assertWithinWindow_(existing.recorded_at, GRADE_DELETE_WINDOW_MS, 'حذف قيد المشاركة');
+  }
+
+  const { error } = await supabaseAdmin.from('participation_log').delete().eq('id', id);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'حذف قيد مشاركة', details: { id }, branch: user.branch,
+  });
+  await recomputeGradeAggregation_(existing.student_id, existing.subject); // 🆕 إعادة حساب فورية
   return res.status(200).json({ success: true, data: true });
 }
 
@@ -1157,9 +1312,13 @@ export default createRouter({
   listAssignmentQuestions: handleListAssignmentQuestions,
   saveAssignment: handleSaveAssignment,
   deleteAssignment: handleDeleteAssignment,
+  updateAssignmentMaxScore: handleUpdateAssignmentMaxScore,
   listAssignmentRoster: handleListAssignmentRoster,
   saveAssignmentGrade: handleSaveAssignmentGrade,
   deleteAssignmentGrade: handleDeleteAssignmentGrade,
+  addParticipationEntry: handleAddParticipationEntry,
+  listParticipationLog: handleListParticipationLog,
+  deleteParticipationEntry: handleDeleteParticipationEntry,
   searchStudentsForPerformance: handleSearchStudentsForPerformance,
   getStudentPerformanceReport: handleGetStudentPerformanceReport,
   getClassPerformanceSummary: handleGetClassPerformanceSummary,
