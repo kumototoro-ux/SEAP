@@ -10,7 +10,7 @@
 import { supabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth } from '../lib/auth.js';
 import { createRouter } from '../lib/router.js';
-import { validateBody, saveAttendanceSchema, updateAttendanceSchema } from '../lib/validation.js';
+import { validateBody, saveAttendanceSchema, updateAttendanceSchema, listAttendanceForDateSchema, listStudentRosterSchema, listStaffRosterSchema } from '../lib/validation.js';
 
 const EDIT_WINDOW_MINUTES = 30;
 
@@ -53,7 +53,7 @@ function checkAttendanceAccess(user, { personType, branch, grade, section, targe
 /* -------------------- عرض حضور يوم معيّن -------------------- */
 async function handleListForDate(req, res) {
   const user = requireAuth(req);
-  const { date, personType, branch, grade, section, targetRole } = req.body;
+  const { date, personType, branch, grade, section, targetRole } = validateBody(listAttendanceForDateSchema, req.body); // 🆕 كان يُقرَأ بلا تحقق
   checkAttendanceAccess(user, { personType, branch, grade, section, targetRole });
 
   let query = supabaseAdmin.from('attendance').select('*').eq('date', date).eq('person_type', personType).eq('branch', branch);
@@ -124,7 +124,7 @@ async function handleUpdateOne(req, res) {
 /* -------------------- قوائم مصغَّرة للتحضير فقط (اسم + معرِّف، بلا أي بيانات حساسة) -------------------- */
 async function handleListStudentRoster(req, res) {
   const user = requireAuth(req);
-  const { branch, grade, section } = req.body;
+  const { branch, grade, section } = validateBody(listStudentRosterSchema, req.body); // 🆕 كان يُقرَأ بلا تحقق
   checkAttendanceAccess(user, { personType: 'student', branch, grade, section });
 
   const { data, error } = await supabaseAdmin.from('students').select('id, name_ar, grade, section')
@@ -135,7 +135,7 @@ async function handleListStudentRoster(req, res) {
 
 async function handleListStaffRoster(req, res) {
   const user = requireAuth(req);
-  const { branch, targetRole } = req.body;
+  const { branch, targetRole } = validateBody(listStaffRosterSchema, req.body); // 🆕 كان يُقرَأ بلا تحقق
   checkAttendanceAccess(user, { personType: 'employee', branch, targetRole });
 
   const { data, error } = await supabaseAdmin.from('employees').select('id, name_ar, role')
