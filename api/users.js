@@ -70,7 +70,11 @@ async function handleResetPassword(req, res) {
   }
 
   const passwordHash = await bcrypt.hash(employee.national_id, 10);
-  const { error } = await supabaseAdmin.from('users').update({ password_hash: passwordHash }).eq('id', id);
+  const { error } = await supabaseAdmin.from('users').update({
+    password_hash: passwordHash,
+    password_changed_at: null, // 🆕 إصلاح حرج: بدون هذا، القيد الشهري الذاتي القديم كان يرث بعد إعادة تعيين الأدمن —
+    // يمنع المستخدم من إكمال تغيير كلمة مروره الإجباري بعد إعادة التعيين مباشرة. الأدمن لا يخضع لأي قيد أبداً.
+  }).eq('id', id);
   if (error) throw error;
 
   await supabaseAdmin.from('audit_log').insert({
