@@ -115,10 +115,8 @@ function pagesForCurrentUser() {
  * تصبح فارغة لدور معيّن (كل صفحاتها غير مصرَّح له بها) تختفي تلقائياً بلا أثر. */
 const SIDEBAR_GROUPS = [
   { type: 'single', key: 'home' },
-  { type: 'single', key: 'academicCalendar' }, // 🆕
-  { type: 'single', key: 'schedules' }, // 🆕
-  { type: 'single', key: 'assignments' }, // 🆕
-  { type: 'single', key: 'assignmentGrades' }, // 🆕
+  { type: 'group', label: 'التقويم والجداول', icon: 'calendar', items: ['academicCalendar', 'schedules'] }, // 🆕 أُعيد تنظيمها بمجموعة بدل روابط متفرّقة
+  { type: 'group', label: 'التكاليف والدرجات', icon: 'clipboard', items: ['assignments', 'assignmentGrades'] }, // 🆕
   { type: 'single', key: 'messages' },
   { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
   { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
@@ -322,7 +320,7 @@ function renderShell() {
     { key: 'home', label: 'الرئيسية', icon: 'home', ready: true },
     { key: 'messages', label: 'المراسلات', icon: 'messages', ready: true },
     { key: 'search', label: 'بحث', icon: 'search', ready: true },
-    { key: 'tasks', label: 'المهام', icon: 'tasks', ready: false },
+    { key: 'performance', label: 'الأداء', icon: 'tasks', ready: true },
   ];
   document.getElementById('bottomNav').innerHTML = BOTTOM_NAV_ITEMS
     .map((item) => `<a data-bottom-key="${item.key}" data-ready="${item.ready}">${ICONS[item.icon]()}<span>${item.label}</span></a>`)
@@ -1555,12 +1553,12 @@ const SETTINGS_LIST_KEYS = [
 const SETTINGS_SECTIONS = [
   { key: 'general', label: 'المعلومات العامة', icon: 'settingsGear' },
   { key: 'academic', label: 'الهيكل الأكاديمي', icon: 'students', lists: ['branches', 'stages', 'grades', 'sections', 'subjects'] },
+  { key: 'evaluation', label: 'التقييم والاختبارات', icon: 'tasks', lists: ['terms', 'continuousEvalTypes', 'exams'] },
+  { key: 'gradeDistribution', label: 'توزيع الدرجات', icon: 'guardians' }, // 🆕 رُتِّب مبكراً — أساس نتائج الفصول الدراسية (Grade Aggregation)
+  { key: 'subjectMatrix', label: 'توزيع المواد', icon: 'employees' },
   { key: 'accounts', label: 'الحسابات والأدوار', icon: 'lock', lists: ['userTypes', 'roles', 'accountStatuses'] },
   { key: 'attendance', label: 'الحضور والسلوك', icon: 'tasks', lists: ['attendanceStatuses', 'behaviorStatuses'] },
-  { key: 'evaluation', label: 'التقييم والاختبارات', icon: 'tasks', lists: ['terms', 'continuousEvalTypes', 'exams'] },
-  { key: 'subjectMatrix', label: 'توزيع المواد', icon: 'employees' },
-  { key: 'gradeDistribution', label: 'توزيع الدرجات', icon: 'guardians' },
-  { key: 'academicCalendar', label: 'التقويم الدراسي', icon: 'calendar' }, // 🆕
+  { key: 'academicCalendar', label: 'التقويم الدراسي', icon: 'calendar' },
 ];
 
 let siteSettingsListsState = {};
@@ -4234,7 +4232,7 @@ async function renderScheduleClassFilters(area, onFilterReady) {
 
   area.innerHTML = `
     <div class="card" style="margin-bottom:16px">
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+      <div class="af-grid-row">
         <div class="field"><label>الفرع</label><select id="schedFilterBranch">${allowedBranches.map((b) => `<option value="${escapeHtml(b)}" ${b === scheduleFilterBranch ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select></div>
         <div class="field"><label>المرحلة</label><select id="schedFilterStage">${(settings.stages || []).map((s) => `<option value="${escapeHtml(s)}" ${s === scheduleFilterStage ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
         <div class="field"><label>الصف</label><select id="schedFilterGrade">${(settings.grades || []).map((g) => `<option value="${escapeHtml(g)}" ${g === scheduleFilterGrade ? 'selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
@@ -4709,6 +4707,7 @@ async function openAssignmentForm(existing = null, existingQuestions = []) {
   }));
 
   const branchOptions = isAdmin ? (settings.branches || []) : [APP.user.branch];
+  const stageOptions = isAdmin ? (settings.stages || []) : (APP.user.stage ? [APP.user.stage] : []); // 🆕 تقييد المرحلة للمعلم
   const gradeOptions = isAdmin ? (settings.grades || []) : (APP.user.grades || []);
   const sectionOptions = isAdmin ? (settings.sections || []) : (APP.user.sections || []);
   const subjectOptions = isAdmin ? (settings.subjects || []) : (APP.user.subject || []);
@@ -4727,14 +4726,15 @@ async function openAssignmentForm(existing = null, existingQuestions = []) {
     <div class="field" id="af_subtype_wrap"><label>النوع الفرعي</label><select id="af_subtype"></select></div>
     <div class="field"><label>العنوان</label><input type="text" id="af_title" value="${existing ? escapeHtml(existing.title) : ''}"></div>
     <div class="field"><label>الوصف</label><textarea id="af_description" rows="3">${existing ? escapeHtml(existing.description || '') : ''}</textarea></div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+    <div class="af-grid-row">
       <div class="field"><label>الفرع</label><select id="af_branch">${branchOptions.map((b) => `<option value="${escapeHtml(b)}" ${existing && existing.branch === b ? 'selected' : ''}>${escapeHtml(b)}</option>`).join('')}</select></div>
-      <div class="field"><label>المرحلة</label><select id="af_stage">${(settings.stages || []).map((s) => `<option value="${escapeHtml(s)}" ${existing && existing.stage === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
+      <div class="field"><label>المرحلة</label><select id="af_stage">${stageOptions.map((s) => `<option value="${escapeHtml(s)}" ${existing && existing.stage === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
       <div class="field"><label>الصف</label><select id="af_grade">${gradeOptions.map((g) => `<option value="${escapeHtml(g)}" ${existing && existing.grade === g ? 'selected' : ''}>${escapeHtml(g)}</option>`).join('')}</select></div>
       <div class="field"><label>الشعبة</label><select id="af_section">${sectionOptions.map((s) => `<option value="${escapeHtml(s)}" ${existing && existing.section === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
       <div class="field"><label>المادة</label><select id="af_subject">${subjectOptions.map((s) => `<option value="${escapeHtml(s)}" ${existing && existing.subject === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+    <div class="field" id="af_evaltype_wrap"><label>نوع التقييم (لتوزيع الدرجات بنتائج الفصل)</label><select id="af_evaltype"></select></div>
+    <div class="af-grid-row-2">
       <div class="field"><label>متاح من</label><input type="datetime-local" id="af_from" value="${existing && existing.available_from ? existing.available_from.slice(0, 16) : ''}"></div>
       <div class="field"><label>حتى</label><input type="datetime-local" id="af_due" value="${existing && existing.due_at ? existing.due_at.slice(0, 16) : ''}"></div>
     </div>
@@ -4757,6 +4757,12 @@ async function openAssignmentForm(existing = null, existingQuestions = []) {
     document.getElementById('af_subtype').innerHTML = opts.map((o) => `<option value="${escapeHtml(o)}" ${existing && existing.subtype === o ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('');
     document.getElementById('af_questions_wrap').style.display = isEnrichment ? 'none' : 'block';
     document.getElementById('af_youtube_wrap').style.display = isEnrichment ? 'block' : 'none';
+    // 🆕 نوع التقييم لتوزيع الدرجات — يعرض قائمة "التقييم المستمر" للتكاليف، أو "الاختبارات" للاختبارات، ويُخفى بالإثراء (بلا درجة)
+    document.getElementById('af_evaltype_wrap').style.display = isEnrichment ? 'none' : 'block';
+    if (!isEnrichment) {
+      const evalOpts = cat === 'task' ? (settings.continuousEvalTypes || []) : (settings.exams || []);
+      document.getElementById('af_evaltype').innerHTML = evalOpts.map((v) => `<option value="${escapeHtml(v)}" ${existing && existing.eval_type === v ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('');
+    }
   }
   document.getElementById('af_category').addEventListener('change', refreshSubtypeOptions);
   refreshSubtypeOptions();
@@ -4790,7 +4796,7 @@ function renderQuestionsBuilder() {
         <button type="button" class="btn-icon-delete" data-remove-q="${i}" title="حذف السؤال">${ICONS.trash()}</button>
       </div>
       <div class="field"><label>نص السؤال</label><textarea rows="2" data-q-field="questionText" data-q-idx="${i}">${escapeHtml(q.questionText)}</textarea></div>
-      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
+      <div class="af-grid-row-2">
         <div class="field"><label>نوع الإجابة</label>
           <select data-q-field="answerType" data-q-idx="${i}">
             ${Object.entries(ANSWER_TYPE_LABELS).map(([v, l]) => `<option value="${v}" ${q.answerType === v ? 'selected' : ''}>${l}</option>`).join('')}
@@ -4838,9 +4844,9 @@ function renderQuestionOptionsArea(idx) {
     area.innerHTML = `
       <div class="field"><label>الخيارات (حدّد الإجابة الصحيحة)</label>
         ${q.options.map((opt, oi) => `
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div class="mcq-option-row">
             <input type="radio" name="mcq_correct_${idx}" value="${opt.id}" ${q.correctOptionId === opt.id ? 'checked' : ''} data-mcq-correct="${idx}">
-            <input type="text" style="flex:1" placeholder="نص الخيار" value="${escapeHtml(opt.text)}" data-mcq-text="${idx}|${oi}">
+            <input type="text" class="mcq-option-input" placeholder="نص الخيار" value="${escapeHtml(opt.text)}" data-mcq-text="${idx}|${oi}">
             <button type="button" class="btn-icon-delete" data-mcq-remove="${idx}|${oi}">${ICONS.close()}</button>
           </div>`).join('')}
         ${q.options.length < 10 ? `<button type="button" class="btn-outline-sm" data-mcq-add="${idx}">${ICONS.plus()} خيار</button>` : ''}
@@ -4879,6 +4885,7 @@ async function saveAssignmentSubmit(existingId) {
       action: 'saveAssignment',
       category,
       subtype: category === 'enrichment' ? null : document.getElementById('af_subtype').value,
+      evalType: category === 'enrichment' ? null : document.getElementById('af_evaltype').value, // 🆕 أساس توزيع الدرجات
       title,
       description: document.getElementById('af_description').value.trim() || null,
       branch: document.getElementById('af_branch').value,
