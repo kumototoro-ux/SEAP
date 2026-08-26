@@ -3379,32 +3379,48 @@ async function loadMyThreads() {
   area.innerHTML = `<div class="card">${threads.map((t) => `
     <div class="person-card-row" data-open-thread="${t.id}" style="padding:12px 0;border-bottom:1px solid var(--surface);cursor:pointer">
       <div>
-        <div style="font-weight:700;font-size:13.5px">${escapeHtml(t.subject)}</div>
+        <div style="font-weight:700;font-size:13.5px">${t.context_type === 'grade_reopen_request' ? '🔓 ' : ''}${escapeHtml(t.subject)}</div>
         <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${new Date(t.created_at).toLocaleString('ar')}</div>
       </div>
       <span>${ICONS.chevronDown()}</span>
     </div>`).join('')}</div>`;
 
   area.querySelectorAll('[data-open-thread]').forEach((el) => {
-    el.addEventListener('click', () => openThreadView(el.getAttribute('data-open-thread')));
+    const thread = threads.find((t) => String(t.id) === el.getAttribute('data-open-thread'));
+    el.addEventListener('click', () => openThreadView(el.getAttribute('data-open-thread'), thread));
   });
 }
 
-async function openThreadView(threadId) {
+async function openThreadView(threadId, threadMeta) {
   const messages = await apiCall('audit-log', { method: 'POST', body: { action: 'getThread', threadId } });
 
   const { close } = showDetailModal('المحادثة', null, []);
   const body = document.getElementById('modalBodyContent');
+  // 🆕 زر "فتح التعديل" — يظهر فقط للأدمن، وفقط لو الموضوع طلب إعادة فتح درجة فعلياً
+  const isGradeReopenRequest = APP.user.role === 'role_admin' && threadMeta?.context_type === 'grade_reopen_request';
   body.innerHTML = `
+    ${isGradeReopenRequest ? `<button type="button" id="reopenGradeBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">🔓 فتح التعديل ليوم كامل للمعلم</button>` : ''}
     <div id="threadMessagesArea" style="max-height:320px;overflow-y:auto;margin-bottom:14px"></div>
     <div class="student-search-input-wrap">
       <input type="text" id="threadReplyInput" placeholder="اكتب ردّك...">
     </div>
     <button type="button" id="threadReplyBtn" style="margin-top:10px;width:100%">إرسال</button>`;
 
+  if (isGradeReopenRequest) {
+    document.getElementById('reopenGradeBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('reopenGradeBtn');
+      btn.disabled = true; btn.textContent = 'جارِ الفتح...';
+      try {
+        await apiCall('academic-config', { method: 'POST', body: { action: 'reopenGradeEdit', gradeId: threadMeta.context_id } });
+        showToast('تم فتح التعديل للمعلم ليوم كامل بنجاح', 'success');
+        btn.textContent = '✅ تم الفتح';
+      } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = '🔓 فتح التعديل ليوم كامل للمعلم'; }
+    });
+  }
+
   document.getElementById('threadMessagesArea').innerHTML = messages.map((m) => `
     <div style="text-align:${m.sender_id === APP.user.id ? 'left' : 'right'};margin-bottom:10px">
-      <div style="display:inline-block;max-width:80%;padding:8px 12px;border-radius:12px;background:${m.sender_id === APP.user.id ? 'var(--accent-green)' : 'var(--surface)'};font-size:13px">
+      <div style="display:inline-block;max-width:80%;padding:8px 12px;border-radius:12px;background:${m.sender_id === APP.user.id ? 'var(--accent-green)' : 'var(--surface)'};font-size:13px;white-space:pre-line">
         ${escapeHtml(m.body)}
       </div>
       <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${new Date(m.created_at).toLocaleString('ar')}${m.is_original ? ' 📌' : ''}</div>
@@ -3477,11 +3493,10 @@ function openComposeMessageModal(prefill) {
   if (!prefill?.recipients) {
     let searchDebounce;
     const doSearch = async () => {
-      const q = document.getElementById('compose_recipientSearch').value.trim();
       const box = document.getElementById('compose_recipientResults');
-      if (q.length < 2) { box.innerHTML = ''; box.classList.remove('show'); return; }
       const personType = document.getElementById('compose_recipientType')?.value || availableTypes[0];
       const branch = document.getElementById('compose_branchSelect')?.value;
+      const q = document.getElementById('compose_recipientSearch').value.trim();
       let matches;
       try {
         matches = await apiCall('audit-log', { method: 'POST', body: { action: 'searchMessageRecipients', personType, branch, query: q } });
@@ -3498,8 +3513,11 @@ function openComposeMessageModal(prefill) {
         });
       });
     };
+    // 🆕 يعرض القائمة فور فتح النافذة، وفور تغيير النوع/الفرع — بلا انتظار كتابة بحث أولاً
+    doSearch();
     document.getElementById('compose_recipientSearch').addEventListener('input', () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(doSearch, 350); });
-    document.getElementById('compose_recipientType')?.addEventListener('change', () => { selectedRecipients = []; document.getElementById('compose_selectedRecipient').textContent = 'لم يُحدَّد مستلم بعد'; });
+    document.getElementById('compose_recipientType')?.addEventListener('change', () => { selectedRecipients = []; document.getElementById('compose_selectedRecipient').textContent = 'لم يُحدَّد مستلم بعد'; doSearch(); });
+    document.getElementById('compose_branchSelect')?.addEventListener('change', doSearch);
   }
 
   document.getElementById('composeSendBtn').addEventListener('click', async () => {
@@ -4011,24 +4029,24 @@ function wrapDateInputWithArabicDisplay_(input) {
   if (input.dataset.wrapped) return;
   input.dataset.wrapped = 'true';
 
-  const wrap = document.createElement('div');
-  wrap.className = 'date-display-wrap';
-  input.parentNode.insertBefore(wrap, input);
-  wrap.appendChild(input);
-
+  // 🆕 إصلاح حرج: التصميم السابق (طبقة شفافة فوق الحقل) كان يجمّد الحقل
+  // بسطح المكتب بالكامل — مخاطرة تصميمية غير ضرورية. الحل الأضمن: الحقل
+  // الأصلي يبقى طبيعياً تماماً بلا أي تعديل على تفاعله (نقر/كتابة/تنقّل
+  // بالكيبورد كلها أصلية 100%)، ونضيف فقط نص تأكيد عربي صغير **بجانبه**
+  // (لا فوقه) يوضّح التاريخ المختار بصيغة صحيحة دائماً — بلا أي خطر على
+  // وظيفة الحقل نفسه مهما كان عطل عرضه الداخلي بمتصفح الجوال.
   const display = document.createElement('div');
-  display.className = 'date-display-overlay';
-  wrap.appendChild(display);
+  display.className = 'date-display-hint';
+  input.insertAdjacentElement('afterend', display);
 
   const isDateTime = input.type === 'datetime-local';
   const updateDisplay = () => {
-    if (!input.value) { display.textContent = input.placeholder || 'اختر التاريخ'; display.classList.add('is-empty'); return; }
-    display.classList.remove('is-empty');
+    if (!input.value) { display.textContent = ''; return; }
     if (isDateTime) {
       const [datePart, timePart] = input.value.split('T');
-      display.textContent = `${formatDateAr(datePart)} — ${(timePart || '').slice(0, 5)}`;
+      display.textContent = `📅 ${formatDateAr(datePart)} — ${(timePart || '').slice(0, 5)}`;
     } else {
-      display.textContent = formatDateAr(input.value);
+      display.textContent = `📅 ${formatDateAr(input.value)}`;
     }
   };
   updateDisplay();
@@ -5727,8 +5745,11 @@ async function renderGradesRoster() {
     <div style="display:flex;flex-direction:column;gap:6px">
       ${roster.map((r) => {
         const gr = r.grade_row;
-        const canEditThis = isAdmin || !gr || (Date.now() - new Date(gr.recorded_at).getTime()) <= 6 * 60 * 60 * 1000;
+        const baseTime = gr ? ((gr.reopened_at && new Date(gr.reopened_at) > new Date(gr.recorded_at)) ? gr.reopened_at : gr.recorded_at) : null;
+        const withinEditWindow = gr ? (Date.now() - new Date(baseTime).getTime()) <= 24 * 60 * 60 * 1000 : true;
+        const canEditThis = isAdmin || !gr || withinEditWindow;
         const canDeleteThis = gr && (isAdmin || (Date.now() - new Date(gr.recorded_at).getTime()) <= 30 * 60 * 1000);
+        const canRequestReopen = !isAdmin && gr && !withinEditWindow; // 🆕 المعلم فقط، بعد انتهاء المهلة تحديداً
         return `
         <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
           <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(r.student_name)}</span>
@@ -5736,6 +5757,7 @@ async function renderGradesRoster() {
           <input type="text" value="${gr ? escapeHtml(gr.participation_note || '') : ''}" placeholder="ملاحظة" style="flex:1;min-width:120px" data-grade-note="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
           <button type="button" class="btn-outline-sm" data-save-grade="${r.student_id}" ${canEditThis ? '' : 'disabled'}>حفظ</button>
           ${gr ? `<button type="button" class="btn-icon-delete" data-delete-grade="${r.student_id}" ${canDeleteThis ? '' : 'disabled'} title="حذف الرصد">${ICONS.trash()}</button>` : ''}
+          ${canRequestReopen ? `<button type="button" class="btn-outline-sm" data-request-reopen="${r.student_id}" style="color:#C4483A;border-color:#C4483A">🔒 انتهت المهلة — طلب فتح من الأدمن</button>` : ''}
         </div>`;
       }).join('')}
     </div>`;
@@ -5750,6 +5772,20 @@ async function renderGradesRoster() {
       showToast('تم تحديث الدرجة الكلية', 'success');
       renderGradesRoster();
     } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  // 🆕 طلب إعادة فتح تعديل — يفتح نافذة صغيرة لكتابة السبب، مرتبطة تلقائياً بالتكليف والطالب
+  area.querySelectorAll('[data-request-reopen]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const studentId = btn.getAttribute('data-request-reopen');
+      const reason = prompt('وضّح سبب طلب إعادة فتح التعديل (سيصل للأدمن مرتبطاً بكل تفاصيل هذا التكليف):');
+      if (reason === null) return;
+      if (!reason.trim()) { showToast('السبب مطلوب', 'error'); return; }
+      btn.disabled = true; btn.textContent = 'جارِ الإرسال...';
+      apiCall('academic-config', { method: 'POST', body: { action: 'requestGradeEditReopen', assignmentId: assignmentGradesActiveId, studentId, reason: reason.trim() } })
+        .then(() => showToast('تم إرسال الطلب للأدمن بنجاح عبر المراسلات', 'success'))
+        .catch((e) => { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = '🔒 انتهت المهلة — طلب فتح من الأدمن'; });
+    });
   });
 
   area.querySelectorAll('[data-save-grade]').forEach((btn) => {
