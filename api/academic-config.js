@@ -1281,6 +1281,48 @@ async function handleGetClassPerformanceSummary(req, res) {
   return res.status(200).json({ success: true, data: { subjects, roster } });
 }
 
+/* -------------------- 🆕 إحصائيات التسجيل — أدمن (كل الفروع) + إدارة القبول (فرعها فقط) -------------------- */
+
+async function handleGetRegistrationStats(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'Admission']);
+  const isAdmin = user.role === 'role_admin';
+
+  let studentsQuery = supabaseAdmin.from('students').select('branch, grade, fee_status').is('deleted_at', null);
+  if (!isAdmin) studentsQuery = studentsQuery.eq('branch', user.branch); // 🆕 إدارة القبول مقيَّدة بفرعها فقط
+  const { data: students, error: sError } = await studentsQuery;
+  if (sError) throw sError;
+
+  const countBy = (arr, key) => {
+    const map = {};
+    arr.forEach((row) => { const k = row[key] || 'غير محدَّد'; map[k] = (map[k] || 0) + 1; });
+    return Object.entries(map).map(([label, count]) => ({ label, count }));
+  };
+
+  const payload = {
+    totalStudents: students.length,
+    studentsByBranch: isAdmin ? countBy(students, 'branch') : [],
+    studentsByGrade: countBy(students, 'grade'),
+    feeStatusBreakdown: countBy(students, 'fee_status'),
+  };
+
+  // 🆕 الموظفون وأولياء الأمور — للأدمن فقط، كل الفروع
+  if (isAdmin) {
+    const { data: employees, error: eError } = await supabaseAdmin.from('employees').select('branch, role').is('deleted_at', null);
+    if (eError) throw eError;
+    const { data: parents, error: pError } = await supabaseAdmin.from('parent_info').select('branch').is('deleted_at', null);
+    if (pError) throw pError;
+
+    payload.totalEmployees = employees.length;
+    payload.employeesByBranch = countBy(employees, 'branch');
+    payload.employeesByRole = countBy(employees, 'role');
+    payload.totalParents = parents.length;
+    payload.parentsByBranch = countBy(parents, 'branch');
+  }
+
+  return res.status(200).json({ success: true, data: payload });
+}
+
 export default createRouter({
   listMatrix: handleListMatrix,
   addMatrixEntries: handleAddMatrixEntries,
@@ -1322,4 +1364,5 @@ export default createRouter({
   searchStudentsForPerformance: handleSearchStudentsForPerformance,
   getStudentPerformanceReport: handleGetStudentPerformanceReport,
   getClassPerformanceSummary: handleGetClassPerformanceSummary,
+  getRegistrationStats: handleGetRegistrationStats,
 });
