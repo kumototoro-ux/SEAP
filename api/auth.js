@@ -65,7 +65,7 @@ async function handleLogin(req, res) {
   const userPayload = {
     id: employee.id, fullName: employee.name_ar, username: userRow.username,
     branch: employee.branch, allBranches, userType: employee.user_type, role: employee.role,
-    subject: employee.subjects, grades: employee.grades, sections: employee.sections,
+    subject: employee.subjects, grades: employee.grades, sections: employee.sections, stage: employee.stage, // 🆕 المرحلة أُضيفت لتقييد صفحة التكاليف بها أيضاً
   };
 
   const token = issueSessionToken(userPayload);
