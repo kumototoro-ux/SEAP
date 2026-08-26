@@ -167,16 +167,49 @@ function renderLogin() {
     <div class="login-wrap">
       <div class="login-card">
         <div class="login-logo">${mirqatLogo(44)}</div>
-        <h2>مِرقاة</h2>
-        <div class="field"><label>اسم المستخدم</label><input id="username" type="text"></div>
-        <div class="field"><label>كلمة المرور</label><input id="password" type="password"></div>
-        <button id="loginBtn">دخول</button>
+        <h2>جارِ التحميل...</h2>
       </div>
     </div>`;
 
-  document.getElementById('loginBtn').addEventListener('click', doLogin);
-  ['username', 'password'].forEach((id) => {
-    document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+  // 🆕 يجلب اسم المدرسة وشعارها من الإعدادات ويعرضهما بدل العلامة الافتراضية —
+  // "منصتي وشعارها" كما طُلِب. requiresAuth:false لأنها قبل تسجيل الدخول أصلاً.
+  getSettingsOnce().then((settings) => {
+    const schoolName = settings.schoolName || 'مِرقاة';
+    const logoHtml = settings.logoUrl
+      ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(schoolName)}" style="max-height:52px;max-width:180px;object-fit:contain">`
+      : mirqatLogo(44);
+
+    document.getElementById('app').innerHTML = `
+      <div class="login-wrap">
+        <div class="login-card">
+          <div class="login-logo">${logoHtml}</div>
+          <h2>${escapeHtml(schoolName)}</h2>
+          <div class="field"><label>اسم المستخدم</label><input id="username" type="text"></div>
+          <div class="field"><label>كلمة المرور</label><input id="password" type="password"></div>
+          <button id="loginBtn">دخول</button>
+        </div>
+      </div>`;
+
+    document.getElementById('loginBtn').addEventListener('click', doLogin);
+    ['username', 'password'].forEach((id) => {
+      document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+    });
+  }).catch(() => {
+    // 🆕 لو فشل جلب الإعدادات لأي سبب (مثلاً انقطاع اتصال) — نعرض العلامة الافتراضية بدل شاشة فارغة
+    document.getElementById('app').innerHTML = `
+      <div class="login-wrap">
+        <div class="login-card">
+          <div class="login-logo">${mirqatLogo(44)}</div>
+          <h2>مِرقاة</h2>
+          <div class="field"><label>اسم المستخدم</label><input id="username" type="text"></div>
+          <div class="field"><label>كلمة المرور</label><input id="password" type="password"></div>
+          <button id="loginBtn">دخول</button>
+        </div>
+      </div>`;
+    document.getElementById('loginBtn').addEventListener('click', doLogin);
+    ['username', 'password'].forEach((id) => {
+      document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+    });
   });
 }
 
@@ -3273,6 +3306,36 @@ async function performGlobalSearch(query) {
         results.push({
           group: 'المستخدمون', label: u.nameAr, sublabel: u.username,
           action: () => { navigate('users'); },
+        });
+      });
+    } catch (err) { /* تجاهل بصمت */ }
+  }
+
+  // 🆕 5) أولياء الأمور — نفس نمط فحص الصلاحية قبل الجلب
+  if (pagesForCurrentUser().includes('parents')) {
+    try {
+      if (!APP.allParents || !APP.allParents.length) {
+        APP.allParents = await apiCall('parents', { method: 'POST', body: { action: 'list' } });
+      }
+      APP.allParents.filter((p) => p.name_ar.toLowerCase().includes(q)).slice(0, 5).forEach((p) => {
+        results.push({
+          group: 'أولياء الأمور', label: p.name_ar, sublabel: p.phone || '',
+          action: () => { navigate('parents'); },
+        });
+      });
+    } catch (err) { /* تجاهل بصمت */ }
+  }
+
+  // 🆕 6) التكاليف والمهام والاختبارات — بعنوانها، بنفس نطاق صلاحية المستخدم (الخادم يفلتر أصلاً)
+  if (pagesForCurrentUser().includes('assignments')) {
+    try {
+      if (!APP.allAssignmentsForSearch || !APP.allAssignmentsForSearch.length) {
+        APP.allAssignmentsForSearch = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignments' } });
+      }
+      APP.allAssignmentsForSearch.filter((a) => a.title.toLowerCase().includes(q)).slice(0, 5).forEach((a) => {
+        results.push({
+          group: 'التكاليف والمهام', label: a.title, sublabel: `${a.grade} — ${a.section}`,
+          action: () => { navigate('assignments'); },
         });
       });
     } catch (err) { /* تجاهل بصمت */ }
