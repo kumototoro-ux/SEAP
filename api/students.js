@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth, requireRole } from '../lib/auth.js';
 import { createRouter } from '../lib/router.js';
-import { validateBody, addStudentSchema, updateStudentSchema } from '../lib/validation.js';
+import { validateBody, addStudentSchema, updateStudentSchema, listStudentsFilterSchema } from '../lib/validation.js';
 import { generateStudentId } from '../lib/idGenerator.js';
 
 const STUDENT_MANAGE_ROLES_ = ['role_admin', 'Admission', 'role_student_sup'];
@@ -19,12 +19,40 @@ const STUDENT_MANAGE_ROLES_ = ['role_admin', 'Admission', 'role_student_sup'];
 async function handleList(req, res) {
   const user = requireAuth(req);
   requireRole(user, STUDENT_MANAGE_ROLES_); // 🆕 كان مفقوداً — نفس ثغرة الموظفين بالضبط
+  const { branch, stage, grade, section, search } = validateBody(listStudentsFilterSchema, req.body);
+
+  // 🆕 يمنع نقل كل الطلاب دفعة وحدة (قد تصل لآلاف البطاقات): الفرع
+  // يُفرَض تلقائياً لغير الأدمن (بلا اعتماد على أي فرع يُرسِله العميل —
+  // كانت Admission تشوف كل الفروع بالقائمة رغم تقييد نموذج الإضافة سابقاً)
+  const effectiveBranch = user.role === 'role_admin' ? branch : user.branch;
+
+  if (!effectiveBranch && !search) {
+    const e = new Error('حدّد الفرع أو ابحث بالاسم/رقم الهوية أولاً');
+    e.statusCode = 400;
+    throw e;
+  }
+  if (effectiveBranch && !stage && !grade && !section && !search) {
+    const e = new Error('حدّد فلتراً إضافياً (المرحلة أو الصف أو الشعبة) أو ابحث لعرض النتائج');
+    e.statusCode = 400;
+    throw e;
+  }
+
   let query = supabaseAdmin
     .from('students')
     .select('id, national_id, name_ar, name_en, nationality, date_of_birth, gender, branch, stage, grade, section, subjects, fee_status, created_at')
     .is('deleted_at', null)
     .order('created_at', { ascending: false });
-  if (user.role === 'role_student_sup') query = query.eq('branch', user.branch); // 🆕 مشرف الطلاب مقيَّد بفرعه فقط
+
+  if (effectiveBranch) query = query.eq('branch', effectiveBranch);
+  if (stage) query = query.eq('stage', stage);
+  if (grade) query = query.eq('grade', grade);
+  if (section) query = query.eq('section', section);
+  if (search) {
+    const safe = search.replace(/[,()%]/g, ''); // 🆕 يمنع كسر صيغة .or() الخاصة بـ PostgREST
+    query = query.or(`name_ar.ilike.%${safe}%,national_id.ilike.%${safe}%`);
+  }
+  query = query.limit(200); // 🆕 حد أقصى دفاعي إضافي حتى لو تحقّقت كل الفلاتر أعلاه
+
   const { data, error } = await query;
   if (error) throw error;
   return res.status(200).json({ success: true, data });
@@ -35,6 +63,14 @@ async function handleAdd(req, res) {
   const user = requireAuth(req);
   requireRole(user, STUDENT_MANAGE_ROLES_);
   const d = validateBody(addStudentSchema, req.body);
+
+  // 🆕 حماية دفاعية إضافية بالخادم: غير الأدمن لا يقدر يسجّل طالباً بفرع
+  // غير فرعه، حتى لو تلاعب بالطلب مباشرة متجاوزاً قائمة الفروع بالواجهة
+  if (user.role !== 'role_admin' && d.branch !== user.branch) {
+    const e = new Error('لا تملك صلاحية تسجيل طالب بفرع غير فرعك');
+    e.statusCode = 403;
+    throw e;
+  }
 
   const { data: existing } = await supabaseAdmin.from('students').select('id').eq('national_id', d.nationalId).is('deleted_at', null).maybeSingle();
   if (existing) {
@@ -74,12 +110,19 @@ async function handleUpdate(req, res) {
   const { id } = validateBody(z.object({ id: z.string().min(1) }).passthrough(), req.body);
   const d = validateBody(updateStudentSchema, req.body);
 
-  const { data: existing, error: findError } = await supabaseAdmin.from('students').select('id').eq('id', id).is('deleted_at', null).maybeSingle();
+  const { data: existing, error: findError } = await supabaseAdmin.from('students').select('id, branch').eq('id', id).is('deleted_at', null).maybeSingle();
   if (findError) throw findError;
   if (!existing) {
     const err = new Error('الطالب غير موجود');
     err.statusCode = 404;
     throw err;
+  }
+  // 🆕 حماية دفاعية: غير الأدمن لا يقدر يعدّل طالباً بفرع غير فرعه، ولا
+  // ينقله لفرع آخر — لا اعتماد فقط على إخفاء الخيارات بالواجهة
+  if (user.role !== 'role_admin' && (existing.branch !== user.branch || d.branch !== user.branch)) {
+    const e = new Error('لا تملك صلاحية تعديل طالب بفرع غير فرعك');
+    e.statusCode = 403;
+    throw e;
   }
 
   const { error: updateError } = await supabaseAdmin.from('students').update({
