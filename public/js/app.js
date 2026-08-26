@@ -75,6 +75,7 @@ const PAGE_REGISTRY = {
   schedules: { label: 'الجداول الدراسية', icon: 'schedule', render: renderSchedulesView }, // 🆕
   assignments: { label: 'التكاليف والمهام', icon: 'clipboard', render: renderAssignmentsView }, // 🆕
   assignmentGrades: { label: 'رصد الدرجات', icon: 'guardians', render: renderAssignmentGradesView }, // 🆕
+  studentPerformance: { label: 'أداء الطلاب', icon: 'students', render: renderStudentPerformanceView }, // 🆕
   employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
   parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
@@ -98,12 +99,13 @@ const ROLE_PAGES = {
   // Admission التي لا تملك صفحة جداول أصلاً بحسب خارطة الصلاحيات أعلاه).
   // 🆕 'assignments' (تكاليف/مهام): أدمن+معلم (كتابة) + 3 أدوار إشراف (عرض فقط).
   // 🆕 'assignmentGrades' (رصد الدرجات): أدمن ومعلم فقط — لا أحد غيرهما.
-  role_admin: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
-  role_teacher: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'messages', 'studentAttendance', 'performance'],
-  role_student_sup: ['home', 'academicCalendar', 'schedules', 'assignments', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
-  role_teacher_sup: ['home', 'academicCalendar', 'schedules', 'assignments', 'messages', 'staffAttendance', 'performance', 'reports'],
+  // 🆕 'studentPerformance' (أداء الطلاب): كل الأدوار الخمسة بنطاق مختلف لكل دور (محدَّد بالخادم)
+  role_admin: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'studentPerformance', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
+  role_teacher: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'studentPerformance', 'messages', 'studentAttendance', 'performance'],
+  role_student_sup: ['home', 'academicCalendar', 'schedules', 'assignments', 'studentPerformance', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
+  role_teacher_sup: ['home', 'academicCalendar', 'schedules', 'assignments', 'studentPerformance', 'messages', 'staffAttendance', 'performance', 'reports'],
   Admission: ['home', 'academicCalendar', 'messages', 'students', 'parents', 'familyAccounts'],
-  role_branch_monitor: ['home', 'academicCalendar', 'schedules', 'assignments', 'messages', 'staffAttendance', 'performance', 'reports'],
+  role_branch_monitor: ['home', 'academicCalendar', 'schedules', 'assignments', 'studentPerformance', 'messages', 'staffAttendance', 'performance', 'reports'],
 };
 
 function pagesForCurrentUser() {
@@ -117,6 +119,7 @@ const SIDEBAR_GROUPS = [
   { type: 'single', key: 'home' },
   { type: 'group', label: 'التقويم والجداول', icon: 'calendar', items: ['academicCalendar', 'schedules'] }, // 🆕 أُعيد تنظيمها بمجموعة بدل روابط متفرّقة
   { type: 'group', label: 'التكاليف والدرجات', icon: 'clipboard', items: ['assignments', 'assignmentGrades'] }, // 🆕
+  { type: 'single', key: 'studentPerformance' }, // 🆕
   { type: 'single', key: 'messages' },
   { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
   { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
@@ -5006,6 +5009,179 @@ async function renderGradesRoster() {
       } catch (e) { showToast(e.message, 'error'); }
     });
   });
+}
+
+/* ===================== 🆕 صفحة أداء الطلاب (تقارير — كل الصلاحيات بحدود مختلفة) ===================== */
+// أدمن: بلا قيد. مراقب فروع: فروعه. مشرف معلمين/مشرف طلاب: فرعهم فقط.
+// معلم: فرعه + الصف/الشعبة اللي يدرّسهم فقط. الخادم هو من يفرض النطاق
+// الحقيقي بكل استعلام — الواجهة هنا فقط لسهولة الاستخدام.
+
+let perfViewMode = 'student'; // 🆕 'student' | 'class'
+
+async function renderStudentPerformanceView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `
+    <div class="card">
+      <h2 style="margin:0 0 4px">أداء الطلاب</h2>
+      <p style="color:#888;font-size:12px;margin:0 0 16px">تقرير فردي لطالب، أو ملخّص لصف/شعبة كاملة</p>
+      <div class="segmented-control" id="perfModeTabBar" style="margin-bottom:16px">
+        <button type="button" class="segmented-item ${perfViewMode === 'student' ? 'active' : ''}" data-perf-mode="student">تقرير طالب</button>
+        <button type="button" class="segmented-item ${perfViewMode === 'class' ? 'active' : ''}" data-perf-mode="class">ملخّص صف/شعبة</button>
+      </div>
+      <div id="perfContentArea"></div>
+    </div>`;
+
+  document.querySelectorAll('#perfModeTabBar .segmented-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      perfViewMode = btn.getAttribute('data-perf-mode');
+      document.querySelectorAll('#perfModeTabBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderPerformanceContent();
+    });
+  });
+
+  renderPerformanceContent();
+}
+
+function renderPerformanceContent() {
+  const area = document.getElementById('perfContentArea');
+  if (perfViewMode === 'class') renderClassPerformanceSearch(area);
+  else renderStudentPerformanceSearch(area);
+}
+
+/* -------------------- تقرير طالب فردي -------------------- */
+
+function renderStudentPerformanceSearch(area) {
+  area.innerHTML = `
+    <div class="field"><label>ابحث باسم الطالب</label><input type="text" id="perfStudentSearch" placeholder="اكتب اسم الطالب..."></div>
+    <div id="perfStudentResults" style="margin-top:10px"></div>
+    <div id="perfStudentReportArea" style="margin-top:16px"></div>`;
+
+  let debounceTimer;
+  document.getElementById('perfStudentSearch').addEventListener('input', (e) => {
+    clearTimeout(debounceTimer);
+    const query = e.target.value.trim();
+    debounceTimer = setTimeout(() => searchStudentsForPerformance(query), 350);
+  });
+}
+
+async function searchStudentsForPerformance(query) {
+  const resultsArea = document.getElementById('perfStudentResults');
+  if (!query) { resultsArea.innerHTML = ''; return; }
+  resultsArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let students;
+  try {
+    students = await apiCall('academic-config', { method: 'POST', body: { action: 'searchStudentsForPerformance', query } });
+  } catch (e) { resultsArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  if (!students.length) { resultsArea.innerHTML = '<p style="color:#888;font-size:12.5px">لا نتائج</p>'; return; }
+
+  resultsArea.innerHTML = students.map((s) => `
+    <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px;margin-bottom:4px;cursor:pointer" data-perf-student="${s.id}">
+      <span style="font-size:12.5px;font-weight:700">${escapeHtml(s.name_ar)}</span>
+      <span style="font-size:11px;color:var(--text-muted)">${escapeHtml(s.grade)}/${escapeHtml(s.section)} — ${escapeHtml(s.branch)}</span>
+    </div>`).join('');
+
+  resultsArea.querySelectorAll('[data-perf-student]').forEach((row) => {
+    row.addEventListener('click', () => loadStudentPerformanceReport(row.getAttribute('data-perf-student')));
+  });
+}
+
+async function loadStudentPerformanceReport(studentId) {
+  const reportArea = document.getElementById('perfStudentReportArea');
+  reportArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let payload;
+  try {
+    payload = await apiCall('academic-config', { method: 'POST', body: { action: 'getStudentPerformanceReport', studentId } });
+  } catch (e) { reportArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  const { student, grades, behaviorSummary, attendanceSummary } = payload;
+  const avgGrade = grades.length ? Math.round((grades.reduce((sum, g) => sum + Number(g.final_grade), 0) / grades.length) * 100) / 100 : null;
+
+  reportArea.innerHTML = `
+    <div class="card">
+      <h3 style="margin:0 0 4px">${escapeHtml(student.name)}</h3>
+      <p style="color:#888;font-size:12px;margin:0 0 14px">${escapeHtml(student.grade)}/${escapeHtml(student.section)} — ${escapeHtml(student.branch)}</p>
+
+      <div class="perf-stats-row">
+        <div class="perf-stat-box"><span class="perf-stat-value">${avgGrade !== null ? avgGrade : '—'}</span><span class="perf-stat-label">متوسط الدرجات</span></div>
+        <div class="perf-stat-box"><span class="perf-stat-value" style="color:#2F7A4D">${behaviorSummary.positivePoints}</span><span class="perf-stat-label">نقاط سلوك إيجابي</span></div>
+        <div class="perf-stat-box"><span class="perf-stat-value" style="color:#C4483A">${behaviorSummary.negativePoints}</span><span class="perf-stat-label">نقاط سلوك سلبي</span></div>
+      </div>
+
+      <div class="filter-card-title" style="margin-top:16px">الدرجات حسب المادة</div>
+      ${grades.length ? `
+        <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+          ${grades.map((g) => `
+            <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
+              <span style="font-size:12.5px;font-weight:700">${escapeHtml(g.subject)}</span>
+              <span style="font-size:12.5px;font-weight:800">${g.final_grade} / 100</span>
+            </div>`).join('')}
+        </div>` : '<p style="color:#888;font-size:12.5px;margin-top:8px">لا توجد درجات محسوبة بعد</p>'}
+
+      <div class="filter-card-title" style="margin-top:16px">الحضور</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12.5px;color:var(--text-muted)">
+        ${Object.entries(attendanceSummary).map(([status, count]) => `<span>${escapeHtml(status)}: <strong style="color:var(--text)">${count}</strong></span>`).join('') || '<span>لا يوجد سجل حضور بعد</span>'}
+      </div>
+    </div>`;
+}
+
+/* -------------------- ملخّص صف/شعبة كامل -------------------- */
+
+async function renderClassPerformanceSearch(area) {
+  const settings = await getSettingsOnce();
+  const isAdmin = APP.user.role === 'role_admin';
+  const isBranchMonitor = APP.user.role === 'role_branch_monitor';
+  const isTeacher = APP.user.role === 'role_teacher';
+
+  const branchOptions = isAdmin ? (settings.branches || []) : isBranchMonitor ? (APP.user.allBranches || []) : [APP.user.branch];
+  const gradeOptions = isTeacher ? (APP.user.grades || []) : (settings.grades || []);
+  const sectionOptions = isTeacher ? (APP.user.sections || []) : (settings.sections || []);
+
+  area.innerHTML = `
+    <div class="af-grid-row">
+      <div class="field"><label>الفرع</label><select id="perfClassBranch">${branchOptions.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}</select></div>
+      <div class="field"><label>المرحلة</label><select id="perfClassStage">${(isTeacher && APP.user.stage ? [APP.user.stage] : (settings.stages || [])).map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+      <div class="field"><label>الصف</label><select id="perfClassGrade">${gradeOptions.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="perfClassSection">${sectionOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+    </div>
+    <button type="button" id="perfClassLoadBtn" style="margin-top:12px">عرض الملخّص</button>
+    <div id="perfClassSummaryArea" style="margin-top:16px"></div>`;
+
+  document.getElementById('perfClassLoadBtn').addEventListener('click', loadClassPerformanceSummary);
+}
+
+async function loadClassPerformanceSummary() {
+  const summaryArea = document.getElementById('perfClassSummaryArea');
+  summaryArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  const body = {
+    action: 'getClassPerformanceSummary',
+    branch: document.getElementById('perfClassBranch').value,
+    stage: document.getElementById('perfClassStage').value,
+    grade: document.getElementById('perfClassGrade').value,
+    section: document.getElementById('perfClassSection').value,
+  };
+  let payload;
+  try {
+    payload = await apiCall('academic-config', { method: 'POST', body });
+  } catch (e) { summaryArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  const { subjects, roster } = payload;
+  if (!roster.length) { summaryArea.innerHTML = '<p style="color:#888">لا يوجد طلاب بهذا الصف/الشعبة</p>'; return; }
+
+  summaryArea.innerHTML = `
+    <div class="schedule-grid-wrap">
+      <table class="schedule-table">
+        <thead><tr><th>الطالب</th>${subjects.map((s) => `<th>${escapeHtml(s)}</th>`).join('')}<th>المتوسط</th></tr></thead>
+        <tbody>
+          ${roster.map((r) => `
+            <tr>
+              <td class="schedule-period-label" style="text-align:right">${escapeHtml(r.studentName)}</td>
+              ${subjects.map((s) => `<td class="schedule-cell">${r.bySubject[s] !== undefined ? r.bySubject[s] : '—'}</td>`).join('')}
+              <td class="schedule-cell" style="font-weight:800">${r.average !== null ? r.average : '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
 }
 
 /* ===================== نقطة الانطلاق ===================== */
