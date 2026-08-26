@@ -36,7 +36,7 @@ const ASSIGNMENT_VIEW_ROLES = ['role_admin', 'role_teacher', 'role_student_sup',
 const ASSIGNMENT_WRITE_ROLES = ['role_admin', 'role_teacher'];
 const ASSIGNMENT_EDIT_WINDOW_MS = 60 * 60 * 1000;       // 🆕 ساعة واحدة من لحظة النشر
 const ASSIGNMENT_DELETE_WINDOW_MS = 30 * 60 * 1000;     // 🆕 نصف ساعة من لحظة النشر
-const GRADE_EDIT_WINDOW_MS = 6 * 60 * 60 * 1000;        // 🆕 6 ساعات من لحظة الرصد
+const GRADE_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;       // 🆕 يوم كامل من لحظة الرصد (أو آخر إعادة فتح من الأدمن)
 const GRADE_DELETE_WINDOW_MS = 30 * 60 * 1000;          // 🆕 نصف ساعة من لحظة الرصد
 
 /* -------------------- 🆕 تجميع الدرجات (Grade Aggregation) -------------------- */
@@ -1009,7 +1009,15 @@ async function handleSaveAssignmentGrade(req, res) {
     .eq('assignment_id', d.assignmentId).eq('student_id', d.studentId).maybeSingle();
 
   if (existingGrade && user.role !== 'role_admin') {
-    assertWithinWindow_(existingGrade.recorded_at, GRADE_EDIT_WINDOW_MS, 'تعديل الدرجة');
+    // 🆕 الأساس الزمني هو الأحدث بين لحظة الرصد الأصلي وآخر إعادة فتح صريحة من الأدمن
+    const baseTime = (existingGrade.reopened_at && new Date(existingGrade.reopened_at) > new Date(existingGrade.recorded_at))
+      ? existingGrade.reopened_at : existingGrade.recorded_at;
+    try {
+      assertWithinWindow_(baseTime, GRADE_EDIT_WINDOW_MS, 'تعديل الدرجة');
+    } catch (windowError) {
+      windowError.message = 'انتهت مهلة التعديل (يوم كامل من وقت الرصد) — تواصل مع الأدمن عبر المراسلات لطلب إعادة فتح التعديل';
+      throw windowError;
+    }
   }
 
   const row = {
@@ -1029,7 +1037,9 @@ async function handleSaveAssignmentGrade(req, res) {
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
-    action: 'رصد درجة تكليف', details: { assignmentId: d.assignmentId, studentId: d.studentId, score: d.score }, branch: user.branch,
+    action: existingGrade ? 'تعديل درجة تكليف' : 'رصد درجة تكليف',
+    details: { assignmentId: d.assignmentId, studentId: d.studentId, previousScore: existingGrade ? existingGrade.score : null, newScore: d.score }, // 🆕 القيمة السابقة والجديدة معاً
+    branch: user.branch,
   });
   await recomputeGradeAggregation_(d.studentId, assignment.subject); // 🆕 إعادة حساب فورية بعد أي رصد
   return res.status(200).json({ success: true, data: true });
@@ -1067,6 +1077,87 @@ async function handleDeleteAssignmentGrade(req, res) {
   });
   await recomputeGradeAggregation_(studentId, existingGrade.assignments.subject); // 🆕 إعادة حساب فورية بعد الحذف
   return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- 🆕 دورة "طلب إعادة فتح تعديل الدرجة" — مرتبطة بالتكليف مباشرة عبر المراسلات -------------------- */
+
+/** المعلم يطلب من الأدمن فتح تعديل درجة طالب معيّن بعد انتهاء مهلة اليوم
+ * — الطلب يُنشئ رسالة فعلية بنظام المراسلات، مرتبطة بسجل الدرجة بالضبط
+ * (contextType/contextId)، معبَّأة تلقائياً بكل التفاصيل المطلوبة. */
+async function handleRequestGradeEditReopen(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_teacher']);
+  const d = validateBody(z.object({
+    assignmentId: z.union([z.string(), z.number()]), studentId: z.string().min(1),
+    requestedScore: z.number().min(0).optional().nullable(),
+    reason: z.string().trim().min(3, 'وضّح سبب طلب إعادة الفتح').max(500),
+  }), req.body);
+
+  const { data: grade, error: gError } = await supabaseAdmin.from('assignment_grades')
+    .select('*, assignments!inner(id, title, subject, grade, section, teacher_id, teacher_name)')
+    .eq('assignment_id', d.assignmentId).eq('student_id', d.studentId).single();
+  if (gError || !grade) { const e = new Error('لا يوجد رصد درجة لهذا الطالب على هذا التكليف'); e.statusCode = 404; throw e; }
+  if (grade.assignments.teacher_id !== user.id) { const e = new Error('لا تملك صلاحية طلب فتح تعديل لتكليف معلم آخر'); e.statusCode = 403; throw e; }
+
+  const baseTime = (grade.reopened_at && new Date(grade.reopened_at) > new Date(grade.recorded_at)) ? grade.reopened_at : grade.recorded_at;
+  const windowEnd = new Date(new Date(baseTime).getTime() + GRADE_EDIT_WINDOW_MS).toISOString();
+
+  const { data: admins } = await supabaseAdmin.from('employees').select('id').eq('role', 'role_admin').is('deleted_at', null);
+  if (!admins || !admins.length) { const e = new Error('لا يوجد حساب أدمن لاستقبال الطلب حالياً'); e.statusCode = 500; throw e; }
+
+  // 🆕 رسالة معبَّأة تلقائياً بكل التفاصيل المطلوبة — لا مراسلة منفصلة عن السياق
+  const subject = `طلب إعادة فتح تعديل درجة — ${grade.assignments.title}`;
+  const body = [
+    `المعلم: ${user.fullName}`,
+    `الطالب: ${grade.student_name}`,
+    `التكليف/الاختبار: ${grade.assignments.title}`,
+    `المادة: ${grade.assignments.subject}`,
+    `الصف/الشعبة: ${grade.assignments.grade} / ${grade.assignments.section}`,
+    `الدرجة الحالية: ${grade.score ?? '—'} من ${grade.max_score}`,
+    d.requestedScore !== undefined && d.requestedScore !== null ? `الدرجة المطلوب تعديلها إلى: ${d.requestedScore}` : null,
+    `وقت التصحيح الأصلي: ${new Date(grade.recorded_at).toLocaleString('ar-SA-u-ca-gregory')}`,
+    `وقت انتهاء فترة التعديل: ${new Date(windowEnd).toLocaleString('ar-SA-u-ca-gregory')}`,
+    `سبب الطلب: ${d.reason}`,
+  ].filter(Boolean).join('\n');
+
+  const { data: thread, error: threadError } = await supabaseAdmin.from('chat_threads').insert({
+    subject, context_type: 'grade_reopen_request', context_id: String(grade.id),
+    sender_id: user.id, sender_type: 'employee', branch: user.branch,
+  }).select('id').single();
+  if (threadError) throw threadError;
+
+  await supabaseAdmin.from('chat_messages').insert({ thread_id: thread.id, sender_id: user.id, sender_type: 'employee', body, is_original: true });
+  await supabaseAdmin.from('chat_recipients').insert(admins.map((a) => ({ thread_id: thread.id, recipient_id: a.id, recipient_type: 'employee' })));
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'طلب إعادة فتح تعديل درجة', details: { gradeId: grade.id, assignmentId: d.assignmentId, studentId: d.studentId, reason: d.reason, threadId: thread.id }, branch: user.branch,
+  });
+
+  return res.status(200).json({ success: true, data: { threadId: thread.id } });
+}
+
+/** الأدمن يفتح نافذة تعديل جديدة (يوم كامل) لسجل درجة معيّن — يُستدعى
+ * عادة من داخل نفس محادثة الطلب لكن يعمل بمعزل عنها كمان. */
+async function handleReopenGradeEdit(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const { gradeId } = validateBody(z.object({ gradeId: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: grade, error } = await supabaseAdmin.from('assignment_grades').select('*').eq('id', gradeId).single();
+  if (error || !grade) { const e = new Error('سجل الدرجة غير موجود'); e.statusCode = 404; throw e; }
+
+  const now = new Date().toISOString();
+  const { error: updateError } = await supabaseAdmin.from('assignment_grades').update({ reopened_at: now, reopened_by: user.id }).eq('id', gradeId);
+  if (updateError) throw updateError;
+
+  const windowEnd = new Date(Date.now() + GRADE_EDIT_WINDOW_MS).toISOString();
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'فتح تعديل درجة', details: { gradeId, reopenedAt: now, windowEnd, studentId: grade.student_id, assignmentId: grade.assignment_id }, branch: user.branch,
+  });
+
+  return res.status(200).json({ success: true, data: { windowEnd } });
 }
 
 /* -------------------- 🆕 المشاركة والتفاعل (سجل تراكمي مستقل عن التكاليف) -------------------- */
@@ -1377,6 +1468,8 @@ export default createRouter({
   listAssignmentRoster: handleListAssignmentRoster,
   saveAssignmentGrade: handleSaveAssignmentGrade,
   deleteAssignmentGrade: handleDeleteAssignmentGrade,
+  requestGradeEditReopen: handleRequestGradeEditReopen,
+  reopenGradeEdit: handleReopenGradeEdit,
   addParticipationEntry: handleAddParticipationEntry,
   listParticipationLog: handleListParticipationLog,
   deleteParticipationEntry: handleDeleteParticipationEntry,
