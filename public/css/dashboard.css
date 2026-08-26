@@ -658,3 +658,19 @@ button:disabled { opacity: .5; cursor: wait; }
 .assignment-card:hover { box-shadow: var(--shadow-2); }
 .video-embed-wrap { position: relative; width: 100%; padding-top: 56.25%; margin: 10px 0; border-radius: var(--radius-sm); overflow: hidden; background: #000; }
 .video-embed-wrap iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+/* ---------- 🆕 إصلاحات استجابة الجوال + أصناف بديلة عن الأنماط المضمَّنة ---------- */
+.af-grid-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.af-grid-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mcq-option-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.mcq-option-input { flex: 1; min-width: 0; } /* 🆕 min-width:0 ضروري — بدونه input داخل flex ما ينكمش ويكسر الصف على الجوال */
+
+/* 🆕 حقول التاريخ/الوقت تُعرَض دائماً LTR داخلياً بكل المتصفحات — فرضها
+   صراحة يمنع تشوّه/فيض الحقل داخل صفحة RTL (كان يظهر نص التاريخ مقلوباً
+   وفائضاً عن حدود الحقل على الجوال تحديداً) */
+input[type="date"], input[type="time"], input[type="datetime-local"] { direction: ltr; text-align: left; }
+
+@media (max-width: 480px) {
+  .af-grid-row, .af-grid-row-2 { grid-template-columns: 1fr; }
+  .modal-card { max-width: 94vw !important; }
+}
