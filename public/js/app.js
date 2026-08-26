@@ -474,12 +474,172 @@ function navigate(view) {
 
 /* ===================== الصفحة الرئيسية (نموذج لأي صفحة قادمة) ===================== */
 
+/* ===================== 🆕 الصفحة الرئيسية (لوحة ملخّصات احترافية) ===================== */
+// ساعة تناظرية فاخرة + تقويم دراسي مصغَّر + بطاقات إحصائية — كل بطاقة
+// تظهر فقط لو المستخدم يملك صلاحية وصول لتلك الصفحة فعلياً (pagesForCurrentUser).
+
+let homeClockIntervalId = null;
+
 function renderHomeView() {
-  document.getElementById('mainContent').innerHTML = `
+  if (homeClockIntervalId) { clearInterval(homeClockIntervalId); homeClockIntervalId = null; } // 🆕 يمنع تراكم مؤقّتات لو تكرّر فتح الرئيسية
+
+  const main = document.getElementById('mainContent');
+  const pages = pagesForCurrentUser();
+  const now = new Date();
+  const greeting = now.getHours() < 12 ? 'صباح الخير' : now.getHours() < 17 ? 'مساء الخير' : 'مساء الخير';
+
+  main.innerHTML = `
     <div class="card">
-      <h2>أهلاً، ${escapeHtml(APP.user.fullName)}</h2>
-      <p style="color:#666">${escapeHtml(APP.user.role)} — ${escapeHtml(APP.user.branch)}</p>
-    </div>`;
+      <h2 style="margin:0">${greeting}، ${escapeHtml(APP.user.fullName)}</h2>
+      <p style="color:#888;font-size:12.5px;margin:4px 0 0">${escapeHtml(ROLE_LABELS_AR[APP.user.role] || APP.user.role)} — ${escapeHtml(APP.user.branch)}</p>
+    </div>
+
+    <div class="home-top-row">
+      <div class="card home-clock-card">
+        <div id="luxuryClockArea"></div>
+        <div class="home-clock-date" id="homeClockDate"></div>
+      </div>
+      <div class="card home-calendar-card" id="homeCalendarCard">
+        <div class="skel-rows"><div class="skel-row"></div></div>
+      </div>
+    </div>
+
+    <div class="kpi-cards-row" id="homeKpiCardsRow" style="margin-top:16px"></div>
+  `;
+
+  document.getElementById('luxuryClockArea').innerHTML = buildLuxuryClockSVG();
+  updateLuxuryClock();
+  homeClockIntervalId = setInterval(updateLuxuryClock, 1000);
+  document.getElementById('homeClockDate').textContent = now.toLocaleDateString('ar-SA-u-ca-gregory', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+
+  loadHomeCalendarWidget();
+  loadHomeKpiCards(pages);
+}
+
+/** 🆕 ساعة تناظرية فاخرة (إطار ذهبي، قرص داكن) — SVG بحت، بلا صور خارجية */
+function buildLuxuryClockSVG() {
+  const ticks = Array.from({ length: 12 }).map((_, i) => {
+    const angle = i * 30;
+    const isMajor = i % 3 === 0;
+    const r1 = isMajor ? 66 : 72;
+    const rad = (angle * Math.PI) / 180;
+    const x1 = 100 + r1 * Math.sin(rad), y1 = 100 - r1 * Math.cos(rad);
+    const x2 = 100 + 80 * Math.sin(rad), y2 = 100 - 80 * Math.cos(rad);
+    return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" class="clock-tick ${isMajor ? 'clock-tick-major' : ''}"/>`;
+  }).join('');
+
+  return `
+    <svg viewBox="0 0 200 200" class="luxury-clock">
+      <circle cx="100" cy="100" r="96" class="clock-bezel"/>
+      <circle cx="100" cy="100" r="84" class="clock-face"/>
+      ${ticks}
+      <text x="100" y="60" text-anchor="middle" class="clock-brand-text">مِرقاة</text>
+      <line id="clockHourHand" x1="100" y1="100" x2="100" y2="60" class="clock-hand clock-hand-hour"/>
+      <line id="clockMinuteHand" x1="100" y1="100" x2="100" y2="42" class="clock-hand clock-hand-minute"/>
+      <line id="clockSecondHand" x1="100" y1="112" x2="100" y2="36" class="clock-hand clock-hand-second"/>
+      <circle cx="100" cy="100" r="5" class="clock-center"/>
+    </svg>`;
+}
+
+function updateLuxuryClock() {
+  const now = new Date();
+  const h = now.getHours() % 12, m = now.getMinutes(), s = now.getSeconds();
+  const hourHand = document.getElementById('clockHourHand');
+  const minuteHand = document.getElementById('clockMinuteHand');
+  const secondHand = document.getElementById('clockSecondHand');
+  if (!hourHand) return; // 🆕 المستخدم غادر الصفحة — clearInterval يتكفّل بإيقافه لاحقاً، هذا فقط حارس دفاعي
+  hourHand.setAttribute('transform', `rotate(${h * 30 + m * 0.5} 100 100)`);
+  minuteHand.setAttribute('transform', `rotate(${m * 6 + s * 0.1} 100 100)`);
+  secondHand.setAttribute('transform', `rotate(${s * 6} 100 100)`);
+}
+
+/** 🆕 تقويم دراسي مصغَّر — الفصل الحالي + أقرب الأحداث القادمة */
+async function loadHomeCalendarWidget() {
+  const card = document.getElementById('homeCalendarCard');
+  if (!card) return;
+  if (!pagesForCurrentUser().includes('academicCalendar')) { card.style.display = 'none'; return; }
+
+  let calData;
+  try {
+    calData = await apiCall('academic-config', { method: 'POST', body: { action: 'listCalendarData' } });
+  } catch (e) { card.innerHTML = '<p style="color:#888;font-size:12.5px">تعذّر تحميل التقويم</p>'; return; }
+
+  const todayStr = toISODateLocal(new Date());
+  const activeTerm = (calData.terms || []).find((t) => t.start_date <= todayStr && t.end_date >= todayStr) || (calData.terms || [])[0];
+
+  const upcoming = [
+    ...(calData.weeks || []).map((w) => ({ label: w.label || w.week_type, date: w.start_date, type: w.week_type })),
+    ...(calData.holidays || []).map((h) => ({ label: `🌴 ${h.label}`, date: h.start_date, type: 'إجازة' })),
+  ].filter((e) => e.date >= todayStr).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 3);
+
+  card.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0">التقويم الدراسي</h3>
+      <a data-view="academicCalendar" style="font-size:12px;color:var(--primary);cursor:pointer;text-decoration:none">عرض كامل ←</a>
+    </div>
+    ${activeTerm ? `<p style="color:#888;font-size:12.5px;margin:8px 0">${escapeHtml(activeTerm.name)} — ${formatDateAr(activeTerm.start_date)} ← ${formatDateAr(activeTerm.end_date)}</p>` : '<p style="color:#888;font-size:12.5px;margin:8px 0">لا يوجد فصل دراسي ظاهر حالياً</p>'}
+    ${upcoming.length ? `
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+        ${upcoming.map((e) => `
+          <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
+            <span style="font-size:12px">${escapeHtml(e.label)}</span>
+            <span style="font-size:11px;color:var(--text-muted)">${formatDateAr(e.date)}</span>
+          </div>`).join('')}
+      </div>` : ''}`;
+
+  card.querySelector('[data-view="academicCalendar"]')?.addEventListener('click', () => navigate('academicCalendar'));
+}
+
+/** 🆕 بطاقات إحصائية سريعة — كل بطاقة مشروطة بامتلاك المستخدم صلاحية وصول لصفحتها فعلياً */
+async function loadHomeKpiCards(pages) {
+  const row = document.getElementById('homeKpiCardsRow');
+  const cards = [];
+
+  if (pages.includes('students')) {
+    try {
+      const students = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+      cards.push({ label: 'الطلاب', value: students.length, view: 'students' });
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+  if (pages.includes('employees')) {
+    try {
+      const employees = await apiCall('employees', { method: 'POST', body: { action: 'list' } });
+      cards.push({ label: 'الموظفون', value: employees.length, view: 'employees' });
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+  if (pages.includes('messages')) {
+    try {
+      const unread = await apiCall('audit-log', { method: 'POST', body: { action: 'unreadCount' } });
+      cards.push({ label: 'رسائل غير مقروءة', value: unread.count ?? unread, view: 'messages' });
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+  if (pages.includes('assignments')) {
+    try {
+      const assignments = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignments' } });
+      cards.push({ label: 'التكاليف والمهام المنشورة', value: assignments.length, view: 'assignments' });
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+  if (pages.includes('registrationStats')) {
+    try {
+      const stats = await apiCall('academic-config', { method: 'POST', body: { action: 'getRegistrationStats' } });
+      cards.push({ label: 'إجمالي الطلاب المسجَّلين', value: stats.totalStudents, view: 'registrationStats' });
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+  if (pages.includes('performance')) {
+    cards.push({ label: 'تقييم الأداء', value: '←', view: 'performance', isLink: true });
+  }
+
+  if (!cards.length) { row.style.display = 'none'; return; }
+
+  row.innerHTML = cards.map((c) => `
+    <div class="kpi-card" data-home-kpi="${c.view}" style="cursor:pointer">
+      <div class="kpi-card-label">${escapeHtml(c.label)}</div>
+      <div class="kpi-card-value">${c.isLink ? '' : c.value}${c.isLink ? `<span style="font-size:15px;color:var(--primary)">فتح الصفحة ←</span>` : ''}</div>
+    </div>`).join('');
+
+  row.querySelectorAll('[data-home-kpi]').forEach((el) => {
+    el.addEventListener('click', () => navigate(el.getAttribute('data-home-kpi')));
+  });
 }
 
 /* ===================== صفحة الموظفين ===================== */
