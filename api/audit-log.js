@@ -11,7 +11,7 @@ import { supabaseAdmin } from '../lib/supabaseAdmin.js';
 import { requireAuth, requireRole } from '../lib/auth.js';
 import { createRouter } from '../lib/router.js';
 import { z } from 'zod';
-import { validateBody } from '../lib/validation.js';
+import { validateBody, searchMessageRecipientsSchema, sendMessageSchema, replyMessageSchema } from '../lib/validation.js';
 
 /* ===================== سجل التتبّع ===================== */
 async function handleList(req, res) {
@@ -36,7 +36,7 @@ async function isSenderBlocked(personId, personType) {
   return !!data;
 }
 
-/** 🆕 حظر فوري + بلاغ للأدمن عند مخالفة كلام محظور — لا يُنفَّذ الإرسال إطلاقاً */
+/** حظر فوري + بلاغ للأدمن عند مخالفة كلام محظور — لا يُنفَّذ الإرسال إطلاقاً */
 async function blockSenderForViolation(person, term, message) {
   await supabaseAdmin.from('blocked_senders').insert({
     person_id: person.id, person_type: person.type, flagged_message: message,
@@ -47,22 +47,148 @@ async function blockSenderForViolation(person, term, message) {
   });
 }
 
-/** 🆕 تنظيف كسول — يحذف أي رد (لا الرسالة الأصلية) قُرئ منذ أكثر من 24 ساعة، يُستدعى عند كل فتح لموضوع */
-async function cleanupExpiredReplies(threadId) {
-  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-  await supabaseAdmin.from('chat_messages').delete().eq('thread_id', threadId).eq('is_original', false).not('read_at', 'is', null).lt('read_at', cutoff);
+/** 🆕 بحث عربي مرن — يبني نمط Regex يوحِّد أشكال الألف (ا/أ/إ/آ)، التاء
+ * المربوطة والهاء (ة/ه)، والياء والألف المقصورة (ي/ى)، حتى لو اختلفت
+ * كتابة المستخدم عن المخزَّن بقاعدة البيانات بحرف واحد. يُستخدَم مع مشغّل
+ * PostgreSQL للمطابقة النصية غير الحساسة لحالة الأحرف (imatch → ~*). */
+function buildArabicFuzzyPattern_(term) {
+  let escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // يمنع كسر صيغة Regex بمدخلات خاصة
+  escaped = escaped
+    .replace(/[اأإآ]/g, '[اأإآ]')
+    .replace(/[ةه]/g, '[ةه]')
+    .replace(/[يى]/g, '[يى]');
+  return escaped;
+}
+
+/** 🆕 يتحقّق فعلياً (لا اعتماد على واجهة العميل) أن المرسِل مصرَّح له
+ * بمراسلة هذا المستلم بالضبط — يُستدعى بكل رسالة جديدة، ولكل مستلم على
+ * حدة. كانت هذي أكبر ثغرة بالنظام القديم: أي recipients تُرسَل من
+ * العميل كانت تُقبَل بلا أي تحقق خادم إطلاقاً. */
+async function assertCanMessageRecipient_(user, recipient) {
+  if (user.role === 'role_admin') return;
+
+  if (recipient.type === 'employee') {
+    const { data: emp } = await supabaseAdmin.from('employees').select('branch').eq('id', recipient.id).is('deleted_at', null).maybeSingle();
+    if (!emp) { const e = new Error('المستلم غير موجود'); e.statusCode = 404; throw e; }
+    const allowedBranches = user.role === 'role_branch_monitor' ? (user.allBranches || [user.branch]) : [user.branch];
+    if (!allowedBranches.includes(emp.branch)) {
+      const e = new Error('لا تملك صلاحية مراسلة هذا الموظف (خارج فرعك)');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+
+  // 🆕 مراسلة طلاب/أولياء أمور — محصورة بالأدوار المعنية بالطلاب فقط
+  if (!['role_branch_monitor', 'role_student_sup', 'Admission', 'role_teacher'].includes(user.role)) {
+    const e = new Error('دورك لا يملك صلاحية مراسلة الطلاب/أولياء الأمور');
+    e.statusCode = 403;
+    throw e;
+  }
+
+  if (recipient.type === 'student') {
+    const { data: stu } = await supabaseAdmin.from('students').select('branch, grade, section').eq('id', recipient.id).is('deleted_at', null).maybeSingle();
+    if (!stu) { const e = new Error('الطالب غير موجود'); e.statusCode = 404; throw e; }
+    if (user.role === 'role_teacher') {
+      const inScope = stu.branch === user.branch && (user.grades || []).includes(stu.grade) && (user.sections || []).includes(stu.section);
+      if (!inScope) { const e = new Error('لا تملك صلاحية مراسلة هذا الطالب (خارج صفوفك)'); e.statusCode = 403; throw e; }
+      return;
+    }
+    const allowedBranches = user.role === 'role_branch_monitor' ? (user.allBranches || [user.branch]) : [user.branch];
+    if (!allowedBranches.includes(stu.branch)) { const e = new Error('لا تملك صلاحية مراسلة هذا الطالب (خارج فرعك)'); e.statusCode = 403; throw e; }
+    return;
+  }
+
+  if (recipient.type === 'parent') {
+    const { data: links } = await supabaseAdmin.from('parent_student_links').select('student_id').eq('parent_id', recipient.id);
+    const studentIds = (links || []).map((l) => l.student_id);
+    if (!studentIds.length) { const e = new Error('ولي الأمر غير مرتبط بأي طالب'); e.statusCode = 404; throw e; }
+
+    let studentsQuery = supabaseAdmin.from('students').select('id').in('id', studentIds).is('deleted_at', null);
+    if (user.role === 'role_teacher') {
+      studentsQuery = studentsQuery.eq('branch', user.branch).in('grade', user.grades || ['__none__']).in('section', user.sections || ['__none__']);
+    } else {
+      const allowedBranches = user.role === 'role_branch_monitor' ? (user.allBranches || [user.branch]) : [user.branch];
+      studentsQuery = studentsQuery.in('branch', allowedBranches);
+    }
+    const { data: matching } = await studentsQuery;
+    if (!matching || !matching.length) { const e = new Error('لا تملك صلاحية مراسلة ولي هذا الأمر (خارج نطاقك)'); e.statusCode = 403; throw e; }
+    return;
+  }
+
+  const e = new Error('نوع مستلم غير صحيح');
+  e.statusCode = 400;
+  throw e;
+}
+
+/* ===================== 🆕 بحث ذكي عن مستلمي المراسلات (مقيَّد بالصلاحية من الاستعلام نفسه) ===================== */
+async function handleSearchMessageRecipients(req, res) {
+  const user = requireAuth(req);
+  const { personType, branch, query } = validateBody(searchMessageRecipientsSchema, req.body);
+
+  if (personType === 'employee') {
+    let q = supabaseAdmin.from('employees').select('id, name_ar, role, branch').is('deleted_at', null).order('name_ar').limit(20);
+    if (user.role === 'role_admin') { if (branch) q = q.eq('branch', branch); }
+    else if (user.role === 'role_branch_monitor') {
+      const allowed = (user.allBranches || [user.branch]);
+      q = q.in('branch', branch ? [branch].filter((b) => allowed.includes(b)) : allowed);
+    } else q = q.eq('branch', user.branch);
+    if (query) q = q.filter('name_ar', 'imatch', buildArabicFuzzyPattern_(query));
+    const { data, error } = await q;
+    if (error) throw error;
+    return res.status(200).json({ success: true, data });
+  }
+
+  // طلاب/أولياء أمور — محصور بالأدوار المعنية
+  if (!['role_branch_monitor', 'role_student_sup', 'Admission', 'role_teacher'].includes(user.role)) {
+    return res.status(200).json({ success: true, data: [] }); // 🆕 بلا خطأ — فقط لا نتائج (دور لا يملك هذي الميزة أصلاً)
+  }
+
+  if (personType === 'student') {
+    let q = supabaseAdmin.from('students').select('id, name_ar, national_id, branch, grade, section').is('deleted_at', null).order('name_ar').limit(20);
+    if (user.role === 'role_teacher') {
+      q = q.eq('branch', user.branch).in('grade', user.grades || ['__none__']).in('section', user.sections || ['__none__']);
+    } else if (user.role === 'role_branch_monitor') {
+      const allowed = (user.allBranches || [user.branch]);
+      q = q.in('branch', branch ? [branch].filter((b) => allowed.includes(b)) : allowed);
+    } else q = q.eq('branch', user.branch);
+    if (query) q = q.or(`name_ar.imatch.${buildArabicFuzzyPattern_(query)},national_id.ilike.%${query.replace(/[,()%]/g, '')}%`);
+    const { data, error } = await q;
+    if (error) throw error;
+    return res.status(200).json({ success: true, data });
+  }
+
+  if (personType === 'parent') {
+    // 🆕 نجيب الطلاب المسموح بالوصول لهم أولاً، ثم أولياء أمورهم فقط
+    let studentsQuery = supabaseAdmin.from('students').select('id, branch').is('deleted_at', null);
+    if (user.role === 'role_teacher') {
+      studentsQuery = studentsQuery.eq('branch', user.branch).in('grade', user.grades || ['__none__']).in('section', user.sections || ['__none__']);
+    } else if (user.role === 'role_branch_monitor') {
+      const allowed = (user.allBranches || [user.branch]);
+      studentsQuery = studentsQuery.in('branch', branch ? [branch].filter((b) => allowed.includes(b)) : allowed);
+    } else studentsQuery = studentsQuery.eq('branch', user.branch);
+    const { data: allowedStudents } = await studentsQuery;
+    const allowedStudentIds = (allowedStudents || []).map((s) => s.id);
+    if (!allowedStudentIds.length) return res.status(200).json({ success: true, data: [] });
+
+    const { data: links } = await supabaseAdmin.from('parent_student_links').select('parent_id').in('student_id', allowedStudentIds);
+    const allowedParentIds = [...new Set((links || []).map((l) => l.parent_id))];
+    if (!allowedParentIds.length) return res.status(200).json({ success: true, data: [] });
+
+    let q = supabaseAdmin.from('parent_info').select('id, name_ar, national_id, phone, branch').in('id', allowedParentIds).is('deleted_at', null).order('name_ar').limit(20);
+    if (query) q = q.or(`name_ar.imatch.${buildArabicFuzzyPattern_(query)},national_id.ilike.%${query.replace(/[,()%]/g, '')}%`);
+    const { data, error } = await q;
+    if (error) throw error;
+    return res.status(200).json({ success: true, data });
+  }
+
+  return res.status(200).json({ success: true, data: [] });
 }
 
 /* ===================== إرسال رسالة جديدة (تبدأ موضوعاً جديداً) ===================== */
 async function handleSendMessage(req, res) {
   const user = requireAuth(req);
-  const d = validateBody(z.object({
-    subject: z.string().min(2).max(200),
-    body: z.string().min(1).max(2000),
-    contextType: z.string().optional(),
-    contextId: z.string().optional(),
-    recipients: z.array(z.object({ id: z.string(), type: z.enum(['employee', 'student', 'parent']) })).min(1, 'حدّد مستلماً واحداً على الأقل'),
-  }), req.body);
+  const d = validateBody(sendMessageSchema, req.body);
 
   if (await isSenderBlocked(user.id, 'employee')) {
     const e = new Error('حسابك محظور من إرسال الرسائل حالياً — تواصل مع الأدمن');
@@ -77,6 +203,21 @@ async function handleSendMessage(req, res) {
     throw e;
   }
 
+  // 🆕 التحقق الحقيقي بالخادم من كل مستلم — لا اعتماد على قائمة العميل وحدها
+  for (const r of d.recipients) { await assertCanMessageRecipient_(user, r); }
+
+  // 🆕 الصور: تُقبَل فقط لو الإعداد مفعَّل مركزياً بالخادم (لا الاكتفاء بإخفاء الزر بالواجهة)
+  let imageUrl = null;
+  if (d.imageUrl) {
+    const { data: siteSettings } = await supabaseAdmin.from('site_settings').select('allow_message_images').single();
+    if (!siteSettings?.allow_message_images) {
+      const e = new Error('إرسال الصور بالمراسلات معطَّل حالياً من الإعدادات');
+      e.statusCode = 403;
+      throw e;
+    }
+    imageUrl = d.imageUrl;
+  }
+
   const { data: thread, error: threadError } = await supabaseAdmin.from('chat_threads').insert({
     subject: d.subject, context_type: d.contextType || 'general', context_id: d.contextId || null,
     sender_id: user.id, sender_type: 'employee', branch: user.branch,
@@ -84,7 +225,7 @@ async function handleSendMessage(req, res) {
   if (threadError) throw threadError;
 
   const { error: msgError } = await supabaseAdmin.from('chat_messages').insert({
-    thread_id: thread.id, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: true,
+    thread_id: thread.id, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: true, image_url: imageUrl,
   });
   if (msgError) throw msgError;
 
@@ -109,9 +250,8 @@ async function handleListMyThreads(req, res) {
   return res.status(200).json({ success: true, data: threads });
 }
 
-/** 🆕 يتحقّق أن المستخدم طرف فعلي بهذا الموضوع (مُرسِل أصلي أو مستلم مُدرَج)
- * قبل السماح بقراءته أو الرد عليه — كانت ثغرة IDOR حقيقية: أي threadId
- * كان يُقبَل بلا أي تحقق، يعني أي موظف يقدر يقرأ محادثات غيره بتخمين الرقم. */
+/** يتحقّق أن المستخدم طرف فعلي بهذا الموضوع (مُرسِل أصلي أو مستلم مُدرَج)
+ * قبل السماح بقراءته أو الرد عليه — إصلاح ثغرة IDOR سابقة. */
 async function assertThreadParticipant_(user, threadId) {
   const { data: thread, error } = await supabaseAdmin.from('chat_threads').select('sender_id').eq('id', threadId).single();
   if (error || !thread) {
@@ -130,13 +270,13 @@ async function assertThreadParticipant_(user, threadId) {
   }
 }
 
-/* ===================== فتح موضوع (يعلِّم رسائلي كمقروءة، وينظِّف الردود المنتهية) ===================== */
+/* ===================== فتح موضوع (يعلِّم رسائلي كمقروءة) ===================== */
+// 🆕 لم يعد يُحذَف أي رد تلقائياً بعد 24 ساعة — أرشيف دائم قابل للبحث،
+// يتماشى مع رؤية "بريد إلكتروني داخلي" التي تتطلّب استمرارية المحادثة
 async function handleGetThread(req, res) {
   const user = requireAuth(req);
   const { threadId } = req.body;
-  await assertThreadParticipant_(user, threadId); // 🆕 إصلاح ثغرة IDOR
-
-  await cleanupExpiredReplies(threadId);
+  await assertThreadParticipant_(user, threadId);
 
   const { data: messages, error } = await supabaseAdmin.from('chat_messages').select('*').eq('thread_id', threadId).order('created_at', { ascending: true });
   if (error) throw error;
@@ -150,11 +290,11 @@ async function handleGetThread(req, res) {
   return res.status(200).json({ success: true, data: messages });
 }
 
-/* ===================== الرد على موضوع (يُحذَف تلقائياً 24 ساعة بعد قراءته) ===================== */
+/* ===================== الرد على موضوع ===================== */
 async function handleReply(req, res) {
   const user = requireAuth(req);
-  const d = validateBody(z.object({ threadId: z.union([z.string(), z.number()]), body: z.string().min(1).max(2000) }), req.body);
-  await assertThreadParticipant_(user, d.threadId); // 🆕 إصلاح ثغرة IDOR
+  const d = validateBody(replyMessageSchema, req.body);
+  await assertThreadParticipant_(user, d.threadId);
 
   if (await isSenderBlocked(user.id, 'employee')) {
     const e = new Error('حسابك محظور من إرسال الرسائل حالياً — تواصل مع الأدمن');
@@ -169,7 +309,18 @@ async function handleReply(req, res) {
     throw e;
   }
 
-  const { error } = await supabaseAdmin.from('chat_messages').insert({ thread_id: d.threadId, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: false });
+  let imageUrl = null;
+  if (d.imageUrl) {
+    const { data: siteSettings } = await supabaseAdmin.from('site_settings').select('allow_message_images').single();
+    if (!siteSettings?.allow_message_images) {
+      const e = new Error('إرسال الصور بالمراسلات معطَّل حالياً من الإعدادات');
+      e.statusCode = 403;
+      throw e;
+    }
+    imageUrl = d.imageUrl;
+  }
+
+  const { error } = await supabaseAdmin.from('chat_messages').insert({ thread_id: d.threadId, sender_id: user.id, sender_type: 'employee', body: d.body, is_original: false, image_url: imageUrl });
   if (error) throw error;
   return res.status(200).json({ success: true, data: true });
 }
@@ -235,6 +386,7 @@ export default createRouter({
   getThread: handleGetThread,
   reply: handleReply,
   unreadCount: handleUnreadCount,
+  searchMessageRecipients: handleSearchMessageRecipients,
   listBlockedTerms: handleListBlockedTerms,
   addBlockedTerm: handleAddBlockedTerm,
   deleteBlockedTerm: handleDeleteBlockedTerm,
