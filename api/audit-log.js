@@ -68,15 +68,25 @@ async function assertCanMessageRecipient_(user, recipient) {
   if (user.role === 'role_admin') return;
 
   if (recipient.type === 'employee') {
-    const { data: emp } = await supabaseAdmin.from('employees').select('branch').eq('id', recipient.id).is('deleted_at', null).maybeSingle();
+    const { data: emp } = await supabaseAdmin.from('employees').select('branch, role').eq('id', recipient.id).is('deleted_at', null).maybeSingle();
     if (!emp) { const e = new Error('المستلم غير موجود'); e.statusCode = 404; throw e; }
-    const allowedBranches = user.role === 'role_branch_monitor' ? (user.allBranches || [user.branch]) : [user.branch];
-    if (!allowedBranches.includes(emp.branch)) {
-      const e = new Error('لا تملك صلاحية مراسلة هذا الموظف (خارج فرعك)');
-      e.statusCode = 403;
-      throw e;
+
+    if (user.role === 'role_branch_monitor') {
+      const allowedBranches = user.allBranches || [user.branch];
+      if (!allowedBranches.includes(emp.branch)) { const e = new Error('لا تملك صلاحية مراسلة هذا الموظف (خارج فرعك)'); e.statusCode = 403; throw e; }
+      return;
     }
-    return;
+
+    // 🆕 كل الأدوار الأخرى: موظف فرعهم، أو أي أدمن، أو مراقب فرع مسؤول فعلياً عن فرعهم
+    if (emp.branch === user.branch || emp.role === 'role_admin') return;
+    if (emp.role === 'role_branch_monitor') {
+      const { data: monitorRow } = await supabaseAdmin.from('employees').select('branch, employee_branches(branch)').eq('id', recipient.id).single();
+      const supervisesMyBranch = monitorRow && (monitorRow.branch === user.branch || (monitorRow.employee_branches || []).some((b) => b.branch === user.branch));
+      if (supervisesMyBranch) return;
+    }
+    const e = new Error('لا تملك صلاحية مراسلة هذا الموظف (خارج فرعك)');
+    e.statusCode = 403;
+    throw e;
   }
 
   // 🆕 مراسلة طلاب/أولياء أمور — محصورة بالأدوار المعنية بالطلاب فقط
@@ -127,12 +137,27 @@ async function handleSearchMessageRecipients(req, res) {
   const { personType, branch, query } = validateBody(searchMessageRecipientsSchema, req.body);
 
   if (personType === 'employee') {
-    let q = supabaseAdmin.from('employees').select('id, name_ar, role, branch').is('deleted_at', null).order('name_ar').limit(20);
-    if (user.role === 'role_admin') { if (branch) q = q.eq('branch', branch); }
-    else if (user.role === 'role_branch_monitor') {
+    let q = supabaseAdmin.from('employees').select('id, name_ar, role, branch').is('deleted_at', null).order('name_ar').limit(30);
+
+    if (user.role === 'role_admin') {
+      if (branch) q = q.eq('branch', branch);
+    } else if (user.role === 'role_branch_monitor') {
       const allowed = (user.allBranches || [user.branch]);
       q = q.in('branch', branch ? [branch].filter((b) => allowed.includes(b)) : allowed);
-    } else q = q.eq('branch', user.branch);
+    } else {
+      // 🆕 كل الأدوار الأخرى: موظفو فرعهم + كل الأدمن + مراقب/مراقبو الفرع
+      // المسؤولين عن فرعهم تحديداً (حتى لو لم يكونوا "من" هذا الفرع أصلاً)
+      const { data: monitors } = await supabaseAdmin.from('employees')
+        .select('id, branch, employee_branches(branch)').eq('role', 'role_branch_monitor').is('deleted_at', null);
+      const relevantMonitorIds = (monitors || [])
+        .filter((m) => m.branch === user.branch || (m.employee_branches || []).some((b) => b.branch === user.branch))
+        .map((m) => m.id);
+
+      const orParts = [`branch.eq.${user.branch}`, 'role.eq.role_admin'];
+      if (relevantMonitorIds.length) orParts.push(`id.in.(${relevantMonitorIds.join(',')})`);
+      q = q.or(orParts.join(','));
+    }
+
     if (query) q = q.filter('name_ar', 'imatch', buildArabicFuzzyPattern_(query));
     const { data, error } = await q;
     if (error) throw error;
