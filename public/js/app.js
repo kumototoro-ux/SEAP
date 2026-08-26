@@ -2350,26 +2350,39 @@ async function loadAttendanceRoster(personType) {
   const settings = await getSettingsOnce();
   const statuses = settings.attendanceStatuses;
 
-  let roster, existing;
+  let roster, existingPayload;
   try {
     if (personType === 'student') {
       const grade = document.getElementById('att_grade').value;
       const section = document.getElementById('att_section').value;
       roster = await apiCall('attendance', { method: 'POST', body: { action: 'listStudentRoster', branch, grade, section } });
-      existing = await apiCall('attendance', { method: 'POST', body: { action: 'listForDate', date, personType, branch, grade, section } });
+      existingPayload = await apiCall('attendance', { method: 'POST', body: { action: 'listForDate', date, personType, branch, grade, section } });
     } else {
       const targetRole = document.getElementById('att_targetRole').value;
       roster = await apiCall('attendance', { method: 'POST', body: { action: 'listStaffRoster', branch, targetRole } });
-      existing = await apiCall('attendance', { method: 'POST', body: { action: 'listForDate', date, personType, branch, targetRole } });
+      existingPayload = await apiCall('attendance', { method: 'POST', body: { action: 'listForDate', date, personType, branch, targetRole } });
     }
   } catch (e) { showToast(e.message, 'error'); return; }
 
+  const existing = existingPayload.records; // 🆕 الشكل الجديد: { records, context }
+  const ctx = existingPayload.context;
   const existingMap = {};
   existing.forEach((r) => { existingMap[r.person_id] = r; });
 
   if (!roster.length) { showToast('لا يوجد أشخاص مطابقون لهذا الاختيار', 'error'); return; }
 
   document.getElementById('att_rosterCard').style.display = 'block';
+  // 🆕 سياق التقويم الدراسي — تأكيد مرئي بالربط الفعلي بالفصل/الأسبوع/العام الدراسي
+  const ctxBar = document.getElementById('att_calendarContext') || (() => {
+    const div = document.createElement('div');
+    div.id = 'att_calendarContext';
+    document.getElementById('att_rosterCard').insertBefore(div, document.getElementById('att_rosterArea'));
+    return div;
+  })();
+  ctxBar.innerHTML = ctx.termName
+    ? `<p style="color:#888;font-size:12px;margin-bottom:10px">📅 ${escapeHtml(ctx.termName)} (${escapeHtml(ctx.academicYear || '')}) ${ctx.weekLabel ? '— ' + escapeHtml(ctx.weekLabel) : ''}</p>`
+    : `<p style="color:#c47a00;font-size:12px;margin-bottom:10px">⚠️ هذا التاريخ خارج أي فصل دراسي مُعرَّف بالتقويم حالياً — التحضير سيُسجَّل بلا ربط بفصل/أسبوع</p>`;
+
   document.getElementById('att_rosterArea').innerHTML = `
     <div class="att-quick-mark">
       <span>تعليم الكل:</span>
@@ -2378,7 +2391,7 @@ async function loadAttendanceRoster(personType) {
     ${roster.map((p) => {
       const rec = existingMap[p.id];
       return `
-      <div class="person-card-row att-roster-row" data-person-id="${escapeHtml(p.id)}" data-record-id="${rec ? rec.id : ''}" data-status="${rec ? escapeHtml(rec.status) : ''}">
+      <div class="person-card-row att-roster-row" data-person-id="${escapeHtml(p.id)}" data-record-id="${rec ? rec.id : ''}" data-status="${rec ? escapeHtml(rec.status) : ''}" data-stage="${escapeHtml(p.stage || '')}">
         <span class="att-person-name">${escapeHtml(p.name_ar)}</span>
         <div class="att-status-buttons">
           ${statuses.map((st) => `<button type="button" class="att-status-btn ${rec && rec.status === st ? 'active' : ''}" data-status-value="${escapeHtml(st)}">${escapeHtml(st)}</button>`).join('')}
@@ -2426,13 +2439,14 @@ async function saveAttendanceRoster(personType) {
   if (personType === 'student') {
     body.grade = document.getElementById('att_grade').value;
     body.section = document.getElementById('att_section').value;
+    body.stage = rows[0]?.getAttribute('data-stage') || undefined; // 🆕 ربط إضافي بالمرحلة الدراسية
   } else {
     body.targetRole = document.getElementById('att_targetRole').value;
   }
 
   try {
-    await apiCall('attendance', { method: 'POST', body: { action: 'save', ...body } });
-    showToast('تم حفظ الحضور بنجاح', 'success');
+    const result = await apiCall('attendance', { method: 'POST', body: { action: 'save', ...body } });
+    showToast(`تم حفظ حضور ${result.savedCount} شخصاً بنجاح`, 'success');
   } catch (e) { showToast(e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = 'حفظ الحضور'; }
 }
