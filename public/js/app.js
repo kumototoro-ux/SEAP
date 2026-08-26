@@ -2632,6 +2632,7 @@ function renderGaugeSVG(value) {
 
 /** 🆕 رسم دائري (Donut) بسيط لتوزيع نسب — لتحليل الحضور/الحالات بالتقارير الاحترافية */
 function renderDonutChartSVG(segments) {
+  const total = segments.reduce((s, seg) => s + seg.value, 0);
   if (!total) return '<p style="color:#888">لا بيانات كافية بعد</p>';
   const radius = 60, circumference = 2 * Math.PI * radius;
   let cursor = 0;
