@@ -387,12 +387,12 @@ button:disabled { opacity: .5; cursor: wait; }
 @media (max-width: 860px) {
   .sidebar-overlay.show {
     display: block; opacity: 1; pointer-events: auto;
-    top: 70px !important; z-index: 44 !important; /* 🆕 لا تغطي الشريط العلوي — زر ☰ يبقى فوقها ومتاحاً دائماً */
+    top: 70px !important; z-index: 46 !important; /* 🆕 رُفِعت فوق الشريط السفلي (45) — كانت متساوية فتسبّب تداخل بصري */
   }
   .sidebar {
     position: fixed !important; top: 70px !important; bottom: 0 !important; right: 0 !important; left: auto !important;
     height: calc(100vh - 70px) !important; width: 78vw !important; max-width: 280px !important;
-    z-index: 45 !important; transform: translateX(105%); transition: transform .25s ease;
+    z-index: 47 !important; transform: translateX(105%); transition: transform .25s ease; /* 🆕 رُفِعت فوق الشريط السفلي أيضاً */
     overflow-y: auto; box-shadow: var(--shadow-2); margin: 0 !important;
   }
   .sidebar.open { transform: translateX(0) !important; }
@@ -449,6 +449,12 @@ button:disabled { opacity: .5; cursor: wait; }
 .sidebar.collapsed .sidebar-brand { justify-content: center; }
 .sidebar.collapsed .sidebar-collapse-btn { margin: 0; }
 .sidebar.collapsed nav a { justify-content: center; padding: 12px; }
+/* 🆕 إصلاح: المجموعات القابلة للطيّ لم تكن تُخفي تسمياتها ولا عناصرها
+   الفرعية عند طيّ الشريط بسطح المكتب — كانت تفيض وتتبعثر خارج عرض 76px */
+.sidebar.collapsed .sidebar-group-header span,
+.sidebar.collapsed .sidebar-group-header svg:last-child { display: none; }
+.sidebar.collapsed .sidebar-group-items { display: none; }
+.sidebar.collapsed .sidebar-group-header { justify-content: center; padding: 12px; }
 
 /* ---------- 🆕 شعار واسم المنصة أعلى الشريط الجانبي ---------- */
 .sidebar-brand {
@@ -662,8 +668,8 @@ button:disabled { opacity: .5; cursor: wait; }
 /* ---------- 🆕 إصلاحات استجابة الجوال + أصناف بديلة عن الأنماط المضمَّنة ---------- */
 .af-grid-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .af-grid-row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.mcq-option-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.mcq-option-input { flex: 1; min-width: 0; } /* 🆕 min-width:0 ضروري — بدونه input داخل flex ما ينكمش ويكسر الصف على الجوال */
+.mcq-option-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.mcq-option-input { flex: 1; min-width: 120px; } /* 🆕 مصحَّح: min-width:0 كان يسمح للحقل ينكمش لعرض شبه صفري (لا يظهر أي حرف مكتوب) — الآن حد أدنى حقيقي 120px */
 
 /* 🆕 حقول التاريخ/الوقت تُعرَض دائماً LTR داخلياً بكل المتصفحات — فرضها
    صراحة يمنع تشوّه/فيض الحقل داخل صفحة RTL (كان يظهر نص التاريخ مقلوباً
