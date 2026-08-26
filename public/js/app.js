@@ -227,8 +227,11 @@ async function doLogin() {
     APP.user = data.user;
 
     if (data.firstLogin) {
-      localStorage.setItem('mirqat_token', APP.token); // 🆕 كان الخطأ هنا — التوكن لازم يُحفَظ حتى بمسار أول دخول
-      localStorage.setItem('mirqat_user', JSON.stringify(APP.user));
+      // 🆕 إصلاح ثغرة أمنية حرجة: التوكن كان يُحفَظ بالتخزين المحلي هنا مباشرة
+      // — قبل إتمام تغيير كلمة المرور الإجباري فعلياً. أي تحديث للصفحة بهذي
+      // اللحظة كان يدخل المستخدم للوحة التحكم كاملة متجاوزاً الخطوة الإجبارية
+      // بالكامل. الآن: لا يُحفَظ أي شيء بالتخزين المحلي إلا بعد نجاح التغيير
+      // الفعلي — لو حدَّث الصفحة قبل إكماله، يرجع لشاشة الدخول من جديد (آمن).
       renderForceChangePassword();
     } else {
       localStorage.setItem('mirqat_token', APP.token);
@@ -261,7 +264,9 @@ function renderForceChangePassword() {
 
     btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
     try {
-      await apiCall('auth', { method: 'POST', body: { action: 'forceSetPassword', newPassword } });
+      // 🆕 authToken صراحة من الذاكرة (APP.token) — بلا أي حفظ بـlocalStorage
+      // قبل هذي اللحظة، إغلاقاً كاملاً لثغرة تجاوز التغيير الإجباري بتحديث الصفحة
+      await apiCall('auth', { method: 'POST', body: { action: 'forceSetPassword', newPassword }, authToken: APP.token });
       localStorage.setItem('mirqat_token', APP.token);
       localStorage.setItem('mirqat_user', JSON.stringify(APP.user));
       showToast('تم تعيين كلمة المرور بنجاح', 'success');
@@ -1047,7 +1052,7 @@ async function renderStudentsView() {
         <div class="field"><label>الاسم بالإنجليزي * <span style="font-weight:400;color:#888;font-size:11.5px">(تحويل تقريبي تلقائي)</span></label><input id="stu_nameEn" type="text" required></div>
         <div class="field" id="stu_nationalIdField"><label>رقم الهوية/الإقامة/الجواز *</label><input id="stu_nationalId" type="text" maxlength="20" required></div>
         <div class="field"><label>الجنسية</label><input id="stu_nationality" type="text"></div>
-        <div class="field"><label>تاريخ الميلاد</label><input id="stu_dateOfBirth" type="date"></div>
+        <div class="field"><label>تاريخ الميلاد</label><input id="stu_dateOfBirth" type="date" dir="ltr"></div>
         <div class="field"><label>الجنس</label>
           <select id="stu_gender">
             <option value="">-- غير محدَّد --</option>
@@ -1057,7 +1062,7 @@ async function renderStudentsView() {
         </div>
         <div class="field"><label>الفرع *</label>
           <select id="stu_branch" required><option value="" disabled selected>-- اختر --</option>
-            ${settings.branches.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+            ${allowedBranchesForUser_(settings.branches).map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
           </select>
         </div>
         <div class="field"><label>المرحلة *</label>
@@ -1075,8 +1080,10 @@ async function renderStudentsView() {
             ${settings.sections.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
           </select>
         </div>
-        <div class="filter-card-title">المواد الدراسية</div>
-        <div class="checkbox-list" id="stu_subjectsBox">${scopeCheckboxesHtml(settings.subjects, [], 'stu-subject-cb')}</div>
+        <div class="filter-card-title">المواد الدراسية <span style="font-weight:400;color:#888;font-size:11px">(تُسحَب تلقائياً من توزيع المواد بالإعدادات فور اختيار الفرع/المرحلة/الصف/الشعبة)</span></div>
+        <div class="student-chip-list" id="stu_subjectsDisplay">
+          <p style="color:#888;font-size:12px">اختر الفرع والمرحلة والصف والشعبة أولاً</p>
+        </div>
 
         <button type="submit" id="addStuBtn" style="margin-top:14px">تسجيل الطالب</button>
         <button type="button" id="cancelStuEditBtn" style="display:none;background:#888;margin-top:8px">إلغاء التعديل</button>
@@ -1099,6 +1106,10 @@ async function renderStudentsView() {
   document.getElementById('addStuForm').addEventListener('submit', saveStudentHandler);
   document.getElementById('cancelStuEditBtn').addEventListener('click', resetStudentForm);
   document.getElementById('stuSearchInput').addEventListener('input', renderStudentsTable);
+  // 🆕 سحب المواد تلقائياً من توزيع المواد بالإعدادات فور اكتمال الفرع/المرحلة/الصف/الشعبة
+  ['stu_branch', 'stu_stage', 'stu_grade', 'stu_section'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', refreshStudentSubjects);
+  });
 
   loadStudentsList();
 }
@@ -1111,9 +1122,36 @@ function resetStudentForm() {
   document.getElementById('stuFormTitle').textContent = 'تسجيل طالب جديد';
   document.getElementById('addStuBtn').textContent = 'تسجيل الطالب';
   document.getElementById('cancelStuEditBtn').style.display = 'none';
-  document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = false; });
+  stuResolvedSubjects = []; // 🆕
+  document.getElementById('stu_subjectsDisplay').innerHTML = '<p style="color:#888;font-size:12px">اختر الفرع والمرحلة والصف والشعبة أولاً</p>';
   document.getElementById('stuFormCard').style.display = 'none'; // 🆕 يُخفى النموذج تلقائياً بعد الحفظ/الإلغاء
   document.getElementById('toggleStuFormBtn').innerHTML = `${ICONS.plus()} تسجيل طالب جديد`;
+}
+
+let stuResolvedSubjects = []; // 🆕 المواد المسحوبة تلقائياً من توزيع المواد — تُستخدَم مباشرة عند الحفظ
+
+/** 🆕 يجلب مواد الفرع/المرحلة/الصف/الشعبة المُختارة تلقائياً من توزيع المواد بالإعدادات */
+async function refreshStudentSubjects() {
+  const branch = document.getElementById('stu_branch').value;
+  const stage = document.getElementById('stu_stage').value;
+  const grade = document.getElementById('stu_grade').value;
+  const section = document.getElementById('stu_section').value;
+  const display = document.getElementById('stu_subjectsDisplay');
+  if (!branch || !stage || !grade || !section) {
+    display.innerHTML = '<p style="color:#888;font-size:12px">اختر الفرع والمرحلة والصف والشعبة أولاً</p>';
+    stuResolvedSubjects = [];
+    return;
+  }
+  display.innerHTML = '<p style="color:#888;font-size:12px">جارِ التحميل...</p>';
+  try {
+    stuResolvedSubjects = await apiCall('academic-config', { method: 'POST', body: { action: 'listSubjectsForClass', branch, stage, grade, section } });
+    display.innerHTML = stuResolvedSubjects.length
+      ? stuResolvedSubjects.map((s) => `<span class="student-chip">${escapeHtml(s)}</span>`).join('')
+      : '<p style="color:#c47a00;font-size:12px">⚠️ لا يوجد توزيع مواد مُعرَّف لهذا الفرع/المرحلة/الصف/الشعبة بعد — أضفه أولاً من الإعدادات ← توزيع المواد</p>';
+  } catch (e) {
+    display.innerHTML = `<p style="color:#c62828;font-size:12px">${escapeHtml(e.message)}</p>`;
+    stuResolvedSubjects = [];
+  }
 }
 
 function startEditStudent(stu) {
@@ -1131,7 +1169,7 @@ function startEditStudent(stu) {
   document.getElementById('stu_stage').value = stu.stage;
   document.getElementById('stu_grade').value = stu.grade;
   document.getElementById('stu_section').value = stu.section;
-  document.querySelectorAll('.stu-subject-cb').forEach((cb) => { cb.checked = (stu.subjects || []).includes(cb.value); });
+  refreshStudentSubjects(); // 🆕 يسحب المواد تلقائياً بحسب صف/شعبة الطالب الحاليين (بدل خانات اختيار يدوية)
 
   document.getElementById('stuFormTitle').textContent = 'تعديل بيانات: ' + stu.name_ar;
   document.getElementById('addStuBtn').textContent = 'حفظ التعديلات';
@@ -1155,7 +1193,7 @@ async function saveStudentHandler(e) {
     stage: document.getElementById('stu_stage').value,
     grade: document.getElementById('stu_grade').value,
     section: document.getElementById('stu_section').value,
-    subjects: collectCheckedValues('.stu-subject-cb'),
+    subjects: stuResolvedSubjects, // 🆕 مسحوبة تلقائياً من توزيع المواد — بدل اختيار يدوي
   };
   if (!editId) body.nationalId = document.getElementById('stu_nationalId').value.trim();
 
@@ -1165,7 +1203,7 @@ async function saveStudentHandler(e) {
       showToast('تم تحديث بيانات الطالب بنجاح', 'success');
     } else {
       await apiCall('students', { method: 'POST', body: { action: 'add', ...body } });
-      showToast('تم تسجيل الطالب بنجاح — حساب دخوله بموقعه المستقبلي جاهز أيضاً', 'success');
+      showToast('تم تسجيل الطالب بنجاح، وحسابه الخاص جاهز مسبقاً لموقع الطلاب فور إطلاقه', 'success');
     }
     resetStudentForm();
     loadStudentsList();
@@ -1449,7 +1487,7 @@ async function renderParentsView() {
         <div class="field"><label>رقم الجوال *</label><input id="parent_phone" type="tel" required></div>
         <div class="field"><label>الفرع *</label>
           <select id="parent_branch" required><option value="" disabled selected>-- اختر --</option>
-            ${settings.branches.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
+            ${allowedBranchesForUser_(settings.branches).map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}
           </select>
         </div>
         <div class="field"><label>صلة القرابة *</label>
@@ -1971,7 +2009,13 @@ async function saveSettingsListHandler(camelKey, snakeKey) {
   try {
     await apiCall('settings', { method: 'POST', body: { action: 'updateList', listKey: snakeKey, values } });
     showToast('تم الحفظ بنجاح', 'success');
+    // 🆕 إصلاح: كان يكتفي بإبطال التخزين المؤقّت بلا إعادة جلب فعلي —
+    // فتظهر القائمة بلا تحديث حتى يُحدَّث المتصفح كاملاً يدوياً. الآن
+    // يُعاد الجلب والتصيير فوراً بنفس اللحظة.
     cachedSettings = null;
+    const freshSettings = await getSettingsOnce();
+    SETTINGS_LIST_KEYS.forEach((k) => { siteSettingsListsState[k.camel] = [...(freshSettings[k.camel] || [])]; });
+    renderSettingsSection();
   } catch (e) { showToast(e.message, 'error'); }
 }
 
@@ -2202,7 +2246,7 @@ async function renderStudentAttendanceView() {
   main.innerHTML = `
     <div class="card">
       <h2>تحضير الطلاب</h2>
-      <div class="field"><label>التاريخ</label><input type="date" id="att_date" value="${todayISO()}"></div>
+      <div class="field"><label>التاريخ</label><input type="date" dir="ltr" id="att_date" value="${todayISO()}"></div>
       <div class="field"><label>الفرع</label><select id="att_branch" ${branchLocked ? 'disabled' : ''}>${branchOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
       <div class="field"><label>الصف</label><select id="att_grade">${gradeOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
       <div class="field"><label>الشعبة</label><select id="att_section">${sectionOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
@@ -2242,7 +2286,7 @@ async function renderStaffAttendanceView() {
   main.innerHTML = `
     <div class="card">
       <h2>تحضير الموظفين</h2>
-      <div class="field"><label>التاريخ</label><input type="date" id="att_date" value="${todayISO()}"></div>
+      <div class="field"><label>التاريخ</label><input type="date" dir="ltr" id="att_date" value="${todayISO()}"></div>
       <div class="field"><label>الفرع</label><select id="att_branch" ${branchLocked ? 'disabled' : ''}>${branchOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
       <div class="field"><label>الفئة</label><select id="att_targetRole" ${targetRoleLocked ? 'disabled' : ''}>${targetRoleOptions.map((o) => `<option value="${o.v}">${escapeHtml(o.l)}</option>`).join('')}</select></div>
       <button type="button" id="att_loadBtn">تحميل القائمة</button>
@@ -3126,8 +3170,8 @@ async function renderPerfCyclesSection(content) {
       <div class="field"><label>النوع</label>
         <select id="cyc_type"><option value="monthly">شهرية</option><option value="quarterly">ربع سنوية</option><option value="yearly">سنوية</option></select>
       </div>
-      <div class="field"><label>تاريخ البداية</label><input type="date" id="cyc_start"></div>
-      <div class="field"><label>تاريخ النهاية</label><input type="date" id="cyc_end"></div>
+      <div class="field"><label>تاريخ البداية</label><input type="date" dir="ltr" id="cyc_start"></div>
+      <div class="field"><label>تاريخ النهاية</label><input type="date" dir="ltr" id="cyc_end"></div>
       <button type="button" id="cyc_addBtn">إنشاء الدورة</button>
     </div>
     <div class="card">
@@ -4267,8 +4311,8 @@ function openTermSettingsForm(term = null) {
       </select>
     </div>
     <div class="field"><label>العام الدراسي</label><input type="text" id="term_year" value="${term ? escapeHtml(term.academic_year) : ''}" placeholder="مثال: 1447هـ أو 2025-2026"></div>
-    <div class="field"><label>تاريخ البداية</label><input type="date" id="term_start" value="${term ? term.start_date : ''}"></div>
-    <div class="field"><label>تاريخ النهاية</label><input type="date" id="term_end" value="${term ? term.end_date : ''}"></div>
+    <div class="field"><label>تاريخ البداية</label><input type="date" dir="ltr" id="term_start" value="${term ? term.start_date : ''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" dir="ltr" id="term_end" value="${term ? term.end_date : ''}"></div>
     <div style="display:flex;gap:10px;margin-top:14px">
       <button type="button" id="saveTermSettingsBtn">${term ? 'حفظ التعديلات' : 'إضافة الفصل'}</button>
       <button type="button" id="cancelTermSettingsBtn" style="background:var(--surface);color:var(--text)">إلغاء</button>
@@ -4426,8 +4470,8 @@ function openWeekForm(week = null) {
       </select>
     </div>
     <div class="field"><label>التسمية</label><input type="text" id="week_label" value="${week ? escapeHtml(week.label || '') : `الأسبوع ${nextWeekNumber}`}" placeholder="مثال: الأسبوع ${nextWeekNumber}"></div>
-    <div class="field"><label>تاريخ البداية</label><input type="date" id="week_start" value="${week ? week.start_date : ''}"></div>
-    <div class="field"><label>تاريخ النهاية</label><input type="date" id="week_end" value="${week ? week.end_date : ''}"></div>
+    <div class="field"><label>تاريخ البداية</label><input type="date" dir="ltr" id="week_start" value="${week ? week.start_date : ''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" dir="ltr" id="week_end" value="${week ? week.end_date : ''}"></div>
     <p style="color:#888;font-size:11.5px;margin-top:-6px">💡 عندك إجازات ضمن هذا الأسبوع؟ أضفها بشكل مستقل من قسم "الإجازات" أسفل — يقدر يقع جزء منها داخل هذا الأسبوع بالضبط</p>
     <div style="display:flex;gap:10px;margin-top:14px">
       <button type="button" id="saveWeekBtn">${week ? 'حفظ التعديلات' : 'إضافة الأسبوع'}</button>
@@ -4521,8 +4565,8 @@ function openHolidayForm(holiday = null) {
   card.innerHTML = `
     <h3 style="margin-top:0">${holiday ? 'تعديل إجازة' : 'إضافة إجازة جديدة'}</h3>
     <div class="field"><label>اسم الإجازة</label><input type="text" id="holiday_label" value="${holiday ? escapeHtml(holiday.label) : ''}" placeholder="مثال: إجازة مطر، إجازة الربيع، اليوم الوطني"></div>
-    <div class="field"><label>تاريخ البداية</label><input type="date" id="holiday_start" value="${holiday ? holiday.start_date : ''}"></div>
-    <div class="field"><label>تاريخ النهاية</label><input type="date" id="holiday_end" value="${holiday ? holiday.end_date : ''}"></div>
+    <div class="field"><label>تاريخ البداية</label><input type="date" dir="ltr" id="holiday_start" value="${holiday ? holiday.start_date : ''}"></div>
+    <div class="field"><label>تاريخ النهاية</label><input type="date" dir="ltr" id="holiday_end" value="${holiday ? holiday.end_date : ''}"></div>
     <p style="color:#888;font-size:11.5px;margin-top:-6px">💡 حدّد أي مدى تاريخي تبيه — يوم واحد، يومين، أو حتى 11 يوماً أو أكثر، طالما ضمن تواريخ الفصل الدراسي</p>
     <div style="display:flex;gap:10px;margin-top:14px">
       <button type="button" id="saveHolidayBtn">${holiday ? 'حفظ التعديلات' : 'إضافة الإجازة'}</button>
@@ -4587,8 +4631,11 @@ function canManageSchedules() {
   return ['role_admin', 'role_branch_monitor', 'role_teacher_sup'].includes(APP.user.role);
 }
 
-/** 🆕 الفروع المتاحة للمستخدم الحالي بالفلاتر (أدمن=الكل، مراقب فروع=فروعه، الباقي=فرعه فقط) */
-function allowedBranchesForSchedules(allBranches) {
+/** 🆕 الفروع المتاحة للمستخدم الحالي (أدمن=الكل، مراقب فروع=فروعه، الباقي=فرعه فقط)
+ * — يُستخدَم بكل نموذج فيه اختيار فرع (تسجيل طالب/ولي أمر، فلاتر الجداول...)
+ * ⚠️ كانت ثغرة أمنية حقيقية: نماذج تسجيل الطلاب/أولياء الأمور كانت تعرض
+ * كل الفروع لكل الأدوار بلا استثناء، بدل حصرها بفرع المستخدم فقط. */
+function allowedBranchesForUser_(allBranches) {
   if (APP.user.role === 'role_admin') return allBranches;
   if (APP.user.role === 'role_branch_monitor') return (APP.user.allBranches || []).filter((b) => allBranches.includes(b));
   return allBranches.includes(APP.user.branch) ? [APP.user.branch] : [];
@@ -4685,7 +4732,7 @@ async function renderTeacherOwnExamSchedule(area) {
 
 async function renderScheduleClassFilters(area, onFilterReady) {
   const settings = await getSettingsOnce();
-  const allowedBranches = allowedBranchesForSchedules(settings.branches || []);
+  const allowedBranches = allowedBranchesForUser_(settings.branches || []);
 
   if (!allowedBranches.length) { area.innerHTML = '<p style="color:#888">لا يوجد فرع متاح لك حالياً</p>'; return; }
   if (!scheduleFilterBranch || !allowedBranches.includes(scheduleFilterBranch)) scheduleFilterBranch = allowedBranches[0];
@@ -4934,7 +4981,7 @@ async function openExamScheduleForm(entry = null) {
         <div class="field"><label>المادة</label>
           <select id="exam_subject">${(settings.subjects || []).map((s) => `<option value="${escapeHtml(s)}" ${entry && entry.subject === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}</select>
         </div>
-        <div class="field"><label>تاريخ الاختبار</label><input type="date" id="exam_date" value="${entry ? entry.exam_date : ''}"></div>
+        <div class="field"><label>تاريخ الاختبار</label><input type="date" dir="ltr" id="exam_date" value="${entry ? entry.exam_date : ''}"></div>
         <div class="field"><label>الفترة</label>
           <select id="exam_period">${EXAM_PERIOD_SLOTS.map((p) => `<option value="${p}" ${entry && entry.period_slot === p ? 'selected' : ''}>${p}</option>`).join('')}</select>
         </div>
@@ -5198,8 +5245,8 @@ async function openAssignmentForm(existing = null, existingQuestions = []) {
     </div>
     <div class="field" id="af_evaltype_wrap"><label>نوع التقييم (لتوزيع الدرجات بنتائج الفصل)</label><select id="af_evaltype"></select></div>
     <div class="af-grid-row-2">
-      <div class="field"><label>متاح من</label><input type="datetime-local" id="af_from" value="${existing && existing.available_from ? existing.available_from.slice(0, 16) : ''}"></div>
-      <div class="field"><label>حتى</label><input type="datetime-local" id="af_due" value="${existing && existing.due_at ? existing.due_at.slice(0, 16) : ''}"></div>
+      <div class="field"><label>متاح من</label><input type="datetime-local" dir="ltr" id="af_from" value="${existing && existing.available_from ? existing.available_from.slice(0, 16) : ''}"></div>
+      <div class="field"><label>حتى</label><input type="datetime-local" dir="ltr" id="af_due" value="${existing && existing.due_at ? existing.due_at.slice(0, 16) : ''}"></div>
     </div>
     <div class="field" id="af_youtube_wrap"><label>رابط فيديو يوتيوب (اختياري)</label><input type="text" id="af_youtube" value="${existing ? escapeHtml(existing.youtube_url || '') : ''}" placeholder="https://youtube.com/watch?v=..."></div>
     <div class="field"><label>رابط مرفق — صورة أو ملف (اختياري)</label><input type="text" id="af_attachment" value="${existing ? escapeHtml(existing.attachment_url || '') : ''}" placeholder="رابط Google Drive أو أي رابط مباشر"></div>
