@@ -44,11 +44,12 @@ const GRADE_DELETE_WINDOW_MS = 30 * 60 * 1000;          // 🆕 نصف ساعة 
 function assertTeacherScopeForAssignment_(user, d) {
   if (user.role === 'role_admin') return;
   const inScope = user.branch === d.branch
+    && user.stage === d.stage // 🆕 المرحلة أُضيفت لتقييد المعلم (كانت مفقودة — كل المراحل كانت تظهر له)
     && (user.grades || []).includes(d.grade)
     && (user.sections || []).includes(d.section)
     && (user.subject || []).includes(d.subject);
   if (!inScope) {
-    const e = new Error('لا تملك صلاحية النشر لهذا الفرع/الصف/الشعبة/المادة');
+    const e = new Error('لا تملك صلاحية النشر لهذا الفرع/المرحلة/الصف/الشعبة/المادة');
     e.statusCode = 403;
     throw e;
   }
@@ -724,6 +725,7 @@ async function handleSaveAssignment(req, res) {
 
   const row = {
     category: d.category, subtype: d.category === 'enrichment' ? null : d.subtype,
+    eval_type: d.category === 'enrichment' ? null : d.evalType, // 🆕 أساس توزيع الدرجات
     title: d.title, description: d.description || null,
     branch: d.branch, stage: d.stage, grade: d.grade, section: d.section, subject: d.subject,
     available_from: d.availableFrom || null, due_at: d.dueAt || null,
