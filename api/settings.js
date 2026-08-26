@@ -19,7 +19,7 @@ const LIST_KEY_MAP = {
 /* -------------------- جلب الإعدادات (بلا مصادقة إلزامية) -------------------- */
 async function handleGet(req, res) {
   const [{ data: siteSettings, error: siteError }, { data: listRows, error: listError }] = await Promise.all([
-    supabaseAdmin.from('site_settings').select('school_name, logo_url').single(),
+    supabaseAdmin.from('site_settings').select('school_name, logo_url, allow_message_images').single(),
     supabaseAdmin.from('settings_lists').select('list_key, value').order('sort_order'),
   ]);
   if (siteError) throw siteError;
@@ -34,7 +34,7 @@ async function handleGet(req, res) {
 
   return res.status(200).json({
     success: true,
-    data: { schoolName: siteSettings.school_name, logoUrl: siteSettings.logo_url, ...grouped },
+    data: { schoolName: siteSettings.school_name, logoUrl: siteSettings.logo_url, allowMessageImages: siteSettings.allow_message_images || false, ...grouped },
   });
 }
 
@@ -68,6 +68,7 @@ async function handleUpdateSite(req, res) {
   const dbUpdates = {};
   if (updates.schoolName !== undefined) dbUpdates.school_name = updates.schoolName;
   if (updates.logoUrl !== undefined) dbUpdates.logo_url = updates.logoUrl;
+  if (updates.allowMessageImages !== undefined) dbUpdates.allow_message_images = updates.allowMessageImages; // 🆕
   if (Object.keys(dbUpdates).length === 0) {
     const err = new Error('لم يتم إرسال أي حقل للتحديث');
     err.statusCode = 400;
