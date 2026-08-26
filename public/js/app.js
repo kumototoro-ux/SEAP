@@ -1040,6 +1040,7 @@ async function renderStudentsView() {
 
   const settings = await getSettingsOnce();
   APP.allStudents = [];
+  const isAdmin = APP.user.role === 'role_admin';
 
   main.innerHTML = `
     <button type="button" class="btn-toggle-form" id="toggleStuFormBtn">${ICONS.plus()} تسجيل طالب جديد</button>
@@ -1092,8 +1093,15 @@ async function renderStudentsView() {
 
     <div class="card">
       <h3>قائمة الطلاب</h3>
-      <div class="field"><label>بحث بالاسم أو الصف أو الشعبة</label><input id="stuSearchInput" type="text"></div>
-      <div id="stuListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
+      <p style="color:#888;font-size:12px;margin-top:-6px">${isAdmin ? 'حدّد الفرع، ثم فلتراً إضافياً أو ابحث لعرض النتائج' : 'حدّد فلتراً إضافياً (مرحلة/صف/شعبة) أو ابحث لعرض النتائج'}</p>
+      <div class="af-grid-row">
+        ${isAdmin ? `<div class="field"><label>الفرع</label><select id="stu_filterBranch"><option value="">-- اختر --</option>${settings.branches.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>` : ''}
+        <div class="field"><label>المرحلة</label><select id="stu_filterStage"><option value="">-- الكل --</option>${settings.stages.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+        <div class="field"><label>الصف</label><select id="stu_filterGrade"><option value="">-- الكل --</option>${settings.grades.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+        <div class="field"><label>الشعبة</label><select id="stu_filterSection"><option value="">-- الكل --</option>${settings.sections.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+      </div>
+      <div class="field"><label>أو ابحث بالاسم أو رقم الهوية</label><input id="stuSearchInput" type="text" placeholder="اكتب اسم الطالب أو رقم هويته..."></div>
+      <div id="stuListArea"><p style="color:#888;font-size:12.5px">${isAdmin ? 'اختر الفرع أولاً لعرض النتائج' : 'حدّد فلتراً أو ابحث لعرض النتائج'}</p></div>
     </div>`;
 
   wireFormToggle('toggleStuFormBtn', 'stuFormCard', `${ICONS.plus()} تسجيل طالب جديد`);
@@ -1105,13 +1113,21 @@ async function renderStudentsView() {
 
   document.getElementById('addStuForm').addEventListener('submit', saveStudentHandler);
   document.getElementById('cancelStuEditBtn').addEventListener('click', resetStudentForm);
-  document.getElementById('stuSearchInput').addEventListener('input', renderStudentsTable);
   // 🆕 سحب المواد تلقائياً من توزيع المواد بالإعدادات فور اكتمال الفرع/المرحلة/الصف/الشعبة
   ['stu_branch', 'stu_stage', 'stu_grade', 'stu_section'].forEach((id) => {
     document.getElementById(id).addEventListener('change', refreshStudentSubjects);
   });
 
-  loadStudentsList();
+  // 🆕 فلاتر القائمة — لا تحميل تلقائي لكل الطلاب؛ فقط عند اختيار فلتر
+  // كافٍ أو كتابة بحث (يمنع ظهور آلاف البطاقات دفعة وحدة)
+  let stuSearchDebounce;
+  document.getElementById('stuSearchInput').addEventListener('input', () => {
+    clearTimeout(stuSearchDebounce);
+    stuSearchDebounce = setTimeout(loadStudentsList, 400);
+  });
+  ['stu_filterBranch', 'stu_filterStage', 'stu_filterGrade', 'stu_filterSection'].forEach((id) => {
+    document.getElementById(id)?.addEventListener('change', loadStudentsList);
+  });
 }
 
 function resetStudentForm() {
@@ -1216,8 +1232,30 @@ async function saveStudentHandler(e) {
 
 async function loadStudentsList() {
   const area = document.getElementById('stuListArea');
+  const isAdmin = APP.user.role === 'role_admin';
+  const branch = isAdmin ? (document.getElementById('stu_filterBranch')?.value || '') : '';
+  const stage = document.getElementById('stu_filterStage')?.value || '';
+  const grade = document.getElementById('stu_filterGrade')?.value || '';
+  const section = document.getElementById('stu_filterSection')?.value || '';
+  const search = (document.getElementById('stuSearchInput').value || '').trim();
+
+  // 🆕 بوابة العرض — بلا هذا الفحص كانت الصفحة تجيب كل الطلاب دفعة وحدة
+  // (قد تصل لآلاف البطاقات). الفرع إجباري أولاً للأدمن، ثم فلتر إضافي
+  // أو بحث لأي دور — بالضبط نفس الفحص المطبَّق بالخادم كطبقة حماية ثانية.
+  if (isAdmin && !branch && !search) {
+    area.innerHTML = '<p style="color:#888;font-size:12.5px">اختر الفرع أولاً لعرض النتائج</p>';
+    APP.allStudents = [];
+    return;
+  }
+  if ((isAdmin ? !!branch : true) && !stage && !grade && !section && !search) {
+    area.innerHTML = `<p style="color:#888;font-size:12.5px">${isAdmin ? 'حدّد فلتراً إضافياً (المرحلة/الصف/الشعبة) أو ابحث لعرض النتائج' : 'حدّد فلتراً (المرحلة/الصف/الشعبة) أو ابحث لعرض النتائج'}</p>`;
+    APP.allStudents = [];
+    return;
+  }
+
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
   try {
-    APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+    APP.allStudents = await apiCall('students', { method: 'POST', body: { action: 'list', branch: branch || undefined, stage: stage || undefined, grade: grade || undefined, section: section || undefined, search: search || undefined } });
     renderStudentsTable();
   } catch (e) {
     area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`;
@@ -1226,13 +1264,9 @@ async function loadStudentsList() {
 
 function renderStudentsTable() {
   const area = document.getElementById('stuListArea');
-  const q = (document.getElementById('stuSearchInput').value || '').trim().toLowerCase();
-  const list = APP.allStudents.filter((s) => {
-    if (!q) return true;
-    return s.name_ar.toLowerCase().includes(q) || s.grade.toLowerCase().includes(q) || s.section.toLowerCase().includes(q);
-  });
+  const list = APP.allStudents; // 🆕 مُفلترة فعلياً من الخادم — لا حاجة لفلترة إضافية بالمتصفح
 
-  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون للفلاتر المحدَّدة</p>'; return; }
 
   area.innerHTML = `<div class="person-card-grid">${list.map((s) => `
     <div class="person-card" data-id="${escapeHtml(s.id)}" data-card-clickable>
