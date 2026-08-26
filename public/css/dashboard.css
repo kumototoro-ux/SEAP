@@ -332,7 +332,10 @@ button:disabled { opacity: .5; cursor: wait; }
 }
 
 /* ---------- 🆕 بطاقات KPI احترافية — أعلى أي لوحة إحصاءات ---------- */
-.kpi-cards-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 4px; }
+/* 🆕 مصحَّح: auto-fit + 1fr كانت تمدّد كل بطاقة لتملأ الشاشات العريضة
+   بالكامل (تبدو فارغة/متباعدة جداً) — auto-fill + حد أقصى 240px يمنع
+   ذلك، والبطاقات تبقى بحجم معقول دائماً بغض النظر عن عرض الشاشة */
+.kpi-cards-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 240px)); gap: 14px; margin-bottom: 4px; justify-content: start; }
 .kpi-card { background: var(--surface-card); border: 1px solid var(--outline); border-radius: var(--radius); padding: 18px; }
 .kpi-card-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; }
 .kpi-card-label { font-size: 11.5px; color: var(--text-muted); font-weight: 700; }
@@ -743,8 +746,27 @@ input[type="date"], input[type="time"], input[type="datetime-local"] { direction
 .home-top-row { display: grid; grid-template-columns: 260px 1fr; gap: 16px; margin-top: 16px; align-items: stretch; }
 @media (max-width: 700px) { .home-top-row { grid-template-columns: 1fr; } }
 
-.home-clock-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.home-clock-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; position: relative; }
 .home-clock-date { font-size: 12.5px; color: var(--text-muted); font-weight: 700; text-align: center; }
+
+/* 🆕 زر تبديل تناظرية/رقمية — شكل أنيق صغير أعلى بطاقة الساعة */
+.clock-mode-toggle {
+  position: absolute; top: 14px; left: 14px; display: flex; align-items: center; gap: 4px;
+  background: var(--surface); border: 1px solid var(--outline); border-radius: 999px;
+  padding: 5px 12px; font-size: 11px; font-weight: 700; color: var(--text-muted); cursor: pointer;
+  transition: background .15s ease;
+}
+.clock-mode-toggle:hover { background: var(--accent-green); color: var(--primary); }
+.clock-mode-toggle svg { width: 12px; height: 12px; transform: rotate(-90deg); }
+
+/* 🆕 الساعة الرقمية — بديل الساعة التناظرية عند الضغط على زر التبديل */
+.digital-clock { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 30px 20px; }
+.digital-clock-time {
+  font-size: 40px; font-weight: 800; color: #1a1a1a; letter-spacing: 2px; font-variant-numeric: tabular-nums;
+  direction: ltr;
+}
+.digital-clock-colon { color: #C9A24B; }
+.digital-clock-brand { font-size: 11px; font-weight: 800; color: #C9A24B; letter-spacing: 1px; margin-top: 6px; }
 .home-calendar-card { display: flex; flex-direction: column; justify-content: center; }
 
 .luxury-clock { width: 200px; height: 200px; }
@@ -758,3 +780,20 @@ input[type="date"], input[type="time"], input[type="datetime-local"] { direction
 .clock-hand-minute { stroke: #E8CD82; stroke-width: 3.5; }
 .clock-hand-second { stroke: #C4483A; stroke-width: 1.5; }
 .clock-center { fill: #C9A24B; }
+
+/* ---------- 🆕 رسم بياني شريطي أفقي (HTML/CSS بحت — بديل SVG المتمدد بشكل خاطئ) ---------- */
+.hbar-chart { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.hbar-row { display: grid; grid-template-columns: 130px 1fr 44px; align-items: center; gap: 10px; }
+.hbar-label { font-size: 12px; font-weight: 700; color: var(--primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { height: 12px; background: var(--surface); border-radius: 999px; overflow: hidden; }
+.hbar-fill { height: 100%; border-radius: 999px; transition: width .3s ease; }
+.hbar-value { font-size: 12.5px; font-weight: 800; text-align: left; }
+
+@media (max-width: 600px) {
+  .hbar-row { grid-template-columns: 90px 1fr 36px; }
+  .hbar-label { font-size: 11px; }
+}
+
+/* ---------- 🆕 قسمان إضافيان بالرئيسية (نشاط أخير + مواعيد قريبة) ---------- */
+.home-widgets-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.home-widget-card { min-height: 120px; }
