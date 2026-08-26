@@ -729,8 +729,13 @@ button:disabled { opacity: .5; cursor: wait; }
 
 /* 🆕 حقول التاريخ/الوقت تُعرَض دائماً LTR داخلياً بكل المتصفحات — فرضها
    صراحة يمنع تشوّه/فيض الحقل داخل صفحة RTL (كان يظهر نص التاريخ مقلوباً
-   وفائضاً عن حدود الحقل على الجوال تحديداً) */
-input[type="date"], input[type="time"], input[type="datetime-local"] { direction: ltr; text-align: left; }
+   وفائضاً عن حدود الحقل على الجوال تحديداً). unicode-bidi: isolate
+   إضافة ضرورية — direction وحدها لا تكفي لعزل الحقل بالكامل عن سياق
+   RTL المحيط بمتصفح Chrome على أندرويد تحديداً (كان لسه يظهر مشوَّهاً
+   بالجوال الحقيقي رغم عمل الإصلاح على سطح المكتب ومحاكي الجوال بالمطوّر) */
+input[type="date"], input[type="time"], input[type="datetime-local"] {
+  direction: ltr; text-align: left; unicode-bidi: isolate; unicode-bidi: -moz-isolate;
+}
 
 @media (max-width: 480px) {
   .af-grid-row, .af-grid-row-2 { grid-template-columns: 1fr; }
