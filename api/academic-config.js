@@ -232,6 +232,24 @@ async function handleDeleteMatrixEntry(req, res) {
   return res.status(200).json({ success: true, data: true });
 }
 
+/** 🆕 قراءة محصورة (بلا تحكّم إداري كامل بالمصفوفة) — تُرجِع فقط أسماء
+ * المواد المُعرَّفة لصف/شعبة/فرع معيّن. تُستخدَم بنماذج تسجيل الطالب
+ * لسحب المواد تلقائياً بدل اختيارها يدوياً — متاحة لأي مستخدم مسجَّل
+ * دخول (بيانات غير حسّاسة: أسماء مواد فقط)، بعكس listMatrix الإدارية
+ * الكاملة المحصورة بالأدمن فقط. */
+async function handleListSubjectsForClass(req, res) {
+  requireAuth(req);
+  const { branch, stage, grade, section } = validateBody(z.object({
+    branch: z.string().min(1), stage: z.string().min(1), grade: z.string().min(1), section: z.string().min(1),
+  }), req.body);
+
+  const { data, error } = await supabaseAdmin.from('subject_distribution_matrix').select('subject')
+    .eq('branch', branch).eq('stage', stage).eq('grade', grade).eq('section', section);
+  if (error) throw error;
+
+  return res.status(200).json({ success: true, data: (data || []).map((r) => r.subject) });
+}
+
 /* -------------------- توزيع الدرجات -------------------- */
 async function handleListGradeDist(req, res) {
   const user = requireAuth(req);
@@ -1327,6 +1345,7 @@ export default createRouter({
   listMatrix: handleListMatrix,
   addMatrixEntries: handleAddMatrixEntries,
   deleteMatrixEntry: handleDeleteMatrixEntry,
+  listSubjectsForClass: handleListSubjectsForClass,
   listGradeDist: handleListGradeDist,
   saveGradeDistForSubject: handleSaveGradeDistForSubject,
   deleteGradeDist: handleDeleteGradeDist,
