@@ -66,16 +66,38 @@ async function handleListForDate(req, res) {
   return res.status(200).json({ success: true, data });
 }
 
+/** 🆕 يجيب الفصل والأسبوع الدراسي الفعليين اللي يقع فيهما تاريخ معيّن —
+ * الربط الحقيقي المطلوب بين الحضور والتقويم الدراسي (لا الاكتفاء بترك
+ * الحقول فارغة). لو التاريخ خارج أي فصل/أسبوع مُعرَّف (مثلاً التقويم لسه
+ * ما اكتمل)، يُرجِع قيم فارغة بلا رمي أي خطأ — تسجيل الحضور يستمر بلا
+ * توقّف حتى لو التقويم غير مكتمل بعد. */
+async function resolveTermAndWeek_(dateStr) {
+  const { data: term } = await supabaseAdmin.from('academic_terms').select('id, name')
+    .lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
+  if (!term) return { termId: null, termName: null, weekId: null, weekLabel: null };
+
+  const { data: week } = await supabaseAdmin.from('academic_weeks').select('id, label, week_number')
+    .eq('term_id', term.id).lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
+
+  return {
+    termId: term.id, termName: term.name,
+    weekId: week ? week.id : null, weekLabel: week ? (week.label || `الأسبوع ${week.week_number}`) : null,
+  };
+}
+
 /* -------------------- تسجيل حضور جماعي ليوم واحد -------------------- */
 async function handleSave(req, res) {
   const user = requireAuth(req);
   const d = validateBody(saveAttendanceSchema, req.body);
   checkAttendanceAccess(user, d);
 
+  const { termId, termName, weekId, weekLabel } = await resolveTermAndWeek_(d.date); // 🆕 ربط حقيقي بالتقويم الدراسي
+
   const rows = d.entries.map((e) => ({
     person_id: e.personId, person_type: d.personType, date: d.date, status: e.status,
     branch: d.branch, grade: d.grade || null, section: d.section || null, target_role: d.targetRole || null,
     recorded_by: user.id, recorded_at: new Date().toISOString(),
+    term_id: termId, term: termName, week_id: weekId, week: weekLabel, // 🆕
   }));
 
   // 🆕 upsert — لو الشخص مسجَّل حضوره أصلاً بنفس اليوم، يُحدَّث بدل تكرار الصف (يطابق قيد UNIQUE بالجدول)
