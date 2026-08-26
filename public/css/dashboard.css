@@ -809,15 +809,5 @@ input[type="date"], input[type="time"], input[type="datetime-local"] {
 .home-widgets-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .home-widget-card { min-height: 120px; }
 
-/* ---------- 🆕 حل جذري لتشوّه عرض التاريخ بالجوال — طبقة عرض عربية مخصَّصة ---------- */
-.date-display-wrap { position: relative; width: 100%; }
-.date-display-wrap input[type="date"], .date-display-wrap input[type="datetime-local"] {
-  position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 2; margin: 0;
-}
-.date-display-overlay {
-  width: 100%; box-sizing: border-box; padding: 11px 14px; border: 1.5px solid var(--outline); border-radius: var(--radius-sm);
-  background: var(--surface); font-size: 14px; color: var(--text); pointer-events: none;
-  display: flex; align-items: center; min-height: 20px; transition: border-color .15s ease, background .15s ease;
-}
-.date-display-overlay.is-empty { color: #999; }
-.date-display-wrap input:focus ~ .date-display-overlay { outline: none; border-color: var(--primary); background: var(--surface-card); }
+/* ---------- 🆕 نص تأكيد التاريخ العربي — بجانب الحقل الأصلي لا فوقه (آمن تماماً، لا يؤثر على تفاعل الحقل إطلاقاً) ---------- */
+.date-display-hint { font-size: 11.5px; color: var(--primary); font-weight: 700; margin-top: 5px; }
