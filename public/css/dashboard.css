@@ -738,3 +738,23 @@ input[type="date"], input[type="time"], input[type="datetime-local"] { direction
 .perf-stat-box { flex: 1; min-width: 110px; background: var(--surface); border-radius: var(--radius-sm); padding: 12px; text-align: center; }
 .perf-stat-value { display: block; font-size: 20px; font-weight: 800; color: var(--primary); }
 .perf-stat-label { display: block; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
+/* ---------- 🆕 الصفحة الرئيسية: الساعة الفاخرة + التقويم المصغَّر ---------- */
+.home-top-row { display: grid; grid-template-columns: 260px 1fr; gap: 16px; margin-top: 16px; align-items: stretch; }
+@media (max-width: 700px) { .home-top-row { grid-template-columns: 1fr; } }
+
+.home-clock-card { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.home-clock-date { font-size: 12.5px; color: var(--text-muted); font-weight: 700; text-align: center; }
+.home-calendar-card { display: flex; flex-direction: column; justify-content: center; }
+
+.luxury-clock { width: 200px; height: 200px; }
+.clock-bezel { fill: #1a1a1a; stroke: #C9A24B; stroke-width: 5; }
+.clock-face { fill: #0F0F0F; stroke: #8a6d2f; stroke-width: 1; }
+.clock-tick { stroke: #C9A24B; stroke-width: 1.4; }
+.clock-tick-major { stroke: #E8CD82; stroke-width: 2.6; }
+.clock-brand-text { fill: #C9A24B; font-size: 11px; font-weight: 800; letter-spacing: 1px; font-family: 'Manrope', sans-serif; }
+.clock-hand { stroke-linecap: round; transform-origin: 100px 100px; }
+.clock-hand-hour { stroke: #E8CD82; stroke-width: 5; }
+.clock-hand-minute { stroke: #E8CD82; stroke-width: 3.5; }
+.clock-hand-second { stroke: #C4483A; stroke-width: 1.5; }
+.clock-center { fill: #C9A24B; }
