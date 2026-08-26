@@ -39,6 +39,40 @@ const ASSIGNMENT_DELETE_WINDOW_MS = 30 * 60 * 1000;     // 🆕 نصف ساعة 
 const GRADE_EDIT_WINDOW_MS = 6 * 60 * 60 * 1000;        // 🆕 6 ساعات من لحظة الرصد
 const GRADE_DELETE_WINDOW_MS = 30 * 60 * 1000;          // 🆕 نصف ساعة من لحظة الرصد
 
+/* -------------------- 🆕 تجميع الدرجات (Grade Aggregation) -------------------- */
+// يُعاد الحساب تلقائياً بعد كل رصد/حذف درجة — يجمع كل assignment_grades
+// لطالب+مادة معيَّنة حسب eval_type، يُرجِّح كل نوع بوزنه من
+// grade_distribution، ويخزّن الناتج النهائي (من 100 عادةً) بجدول
+// grade_aggregation_results مع تفصيل شفاف لكل خطوة حساب.
+async function recomputeGradeAggregation_(studentId, subject) {
+  const { data: student, error: sError } = await supabaseAdmin.from('students').select('id, name_ar, branch, stage, grade, section').eq('id', studentId).single();
+  if (sError || !student) return; // 🆕 طالب محذوف مثلاً — لا داعي لإيقاف الطلب الأساسي بسببه
+
+  const { data: distRows, error: dError } = await supabaseAdmin.from('grade_distribution').select('eval_type, max_grade').eq('subject', subject);
+  if (dError) throw dError;
+  if (!distRows || !distRows.length) return; // 🆕 لا يوجد توزيع درجات لهذي المادة بعد — لا يوجد أساس للحساب
+
+  const { data: grades, error: gError } = await supabaseAdmin.from('assignment_grades').select('score, max_score, assignment_id, assignments!inner(subject, eval_type)')
+    .eq('student_id', studentId).eq('assignments.subject', subject);
+  if (gError) throw gError;
+
+  const breakdown = distRows.map((dist) => {
+    const relevant = (grades || []).filter((g) => g.assignments.eval_type === dist.eval_type && g.score !== null);
+    const earned = relevant.reduce((sum, g) => sum + Number(g.score), 0);
+    const possible = relevant.reduce((sum, g) => sum + Number(g.max_score || 0), 0);
+    const contribution = possible > 0 ? (earned / possible) * Number(dist.max_grade) : 0;
+    return { evalType: dist.eval_type, earned, possible, weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100 };
+  });
+
+  const finalGrade = Math.round(breakdown.reduce((sum, b) => sum + b.contribution, 0) * 100) / 100;
+
+  await supabaseAdmin.from('grade_aggregation_results').upsert({
+    student_id: student.id, student_name: student.name_ar, subject,
+    branch: student.branch, stage: student.stage, grade: student.grade, section: student.section,
+    final_grade: finalGrade, breakdown, computed_at: new Date().toISOString(),
+  }, { onConflict: 'student_id,subject' });
+}
+
 /** 🆕 يتحقق أن المعلم مصرَّح له بالضبط بهذا (الفرع/الصف/الشعبة/المادة) —
  * بحسب مصفوفة grades/sections/subject المخزَّنة بجلسته (JWT). الأدمن بلا قيد. */
 function assertTeacherScopeForAssignment_(user, d) {
@@ -860,7 +894,7 @@ async function handleSaveAssignmentGrade(req, res) {
   requireRole(user, ['role_admin', 'role_teacher']);
   const d = validateBody(saveAssignmentGradeSchema, req.body);
 
-  const { data: assignment, error: aError } = await supabaseAdmin.from('assignments').select('teacher_id, max_score').eq('id', d.assignmentId).single();
+  const { data: assignment, error: aError } = await supabaseAdmin.from('assignments').select('teacher_id, max_score, subject').eq('id', d.assignmentId).single();
   if (aError || !assignment) {
     const e = new Error('التكليف غير موجود');
     e.statusCode = 404;
@@ -910,6 +944,7 @@ async function handleSaveAssignmentGrade(req, res) {
     emp_id: user.id, emp_name: user.fullName, role: user.role,
     action: 'رصد درجة تكليف', details: { assignmentId: d.assignmentId, studentId: d.studentId, score: d.score }, branch: user.branch,
   });
+  await recomputeGradeAggregation_(d.studentId, assignment.subject); // 🆕 إعادة حساب فورية بعد أي رصد
   return res.status(200).json({ success: true, data: true });
 }
 
@@ -920,7 +955,7 @@ async function handleDeleteAssignmentGrade(req, res) {
     assignmentId: z.union([z.string(), z.number()]), studentId: z.string().min(1),
   }), req.body);
 
-  const { data: existingGrade, error: fetchError } = await supabaseAdmin.from('assignment_grades').select('*, assignments!inner(teacher_id)')
+  const { data: existingGrade, error: fetchError } = await supabaseAdmin.from('assignment_grades').select('*, assignments!inner(teacher_id, subject)')
     .eq('assignment_id', assignmentId).eq('student_id', studentId).single();
   if (fetchError || !existingGrade) {
     const e = new Error('لا يوجد رصد درجة لهذا الطالب');
@@ -943,7 +978,152 @@ async function handleDeleteAssignmentGrade(req, res) {
     emp_id: user.id, emp_name: user.fullName, role: user.role,
     action: 'حذف رصد درجة تكليف', details: { assignmentId, studentId }, branch: user.branch,
   });
+  await recomputeGradeAggregation_(studentId, existingGrade.assignments.subject); // 🆕 إعادة حساب فورية بعد الحذف
   return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- 🆕 أداء الطلاب (تقارير — كل الصلاحيات بحدود) -------------------- */
+// كل الأدوار تصل لهذي الصفحة، لكن بنطاق مختلف تماماً:
+// أدمن: بلا قيد. مراقب فروع: فروعه المُسندة. مشرف معلمين/مشرف طلاب:
+// فرعهم فقط. معلم: فرعه + (الصف/الشعبة) اللي يدرّسهم فقط.
+const PERFORMANCE_VIEW_ROLES = ['role_admin', 'role_teacher', 'role_student_sup', 'role_teacher_sup', 'role_branch_monitor'];
+
+/** 🆕 يتحقّق أن (فرع/صف/شعبة) الطالب المستهدَف ضمن نطاق صلاحية المستخدم */
+function assertStudentInPerformanceScope_(user, student) {
+  if (user.role === 'role_admin') return;
+  if (user.role === 'role_branch_monitor') {
+    if (!(user.allBranches || []).includes(student.branch)) {
+      const e = new Error('هذا الطالب خارج نطاق فروعك');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+  if (user.role === 'role_teacher_sup' || user.role === 'role_student_sup') {
+    if (user.branch !== student.branch) {
+      const e = new Error('هذا الطالب خارج نطاق فرعك');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+  if (user.role === 'role_teacher') {
+    const inScope = user.branch === student.branch && (user.grades || []).includes(student.grade) && (user.sections || []).includes(student.section);
+    if (!inScope) {
+      const e = new Error('هذا الطالب خارج نطاق الصفوف التي تدرّسها');
+      e.statusCode = 403;
+      throw e;
+    }
+    return;
+  }
+  const e = new Error('لا تملك صلاحية الوصول لهذي الصفحة');
+  e.statusCode = 403;
+  throw e;
+}
+
+/** 🆕 يبني فلتر (فرع + صف/شعبة اختيارية) لاستعلامات القوائم بحسب نطاق المستخدم */
+function buildPerformanceScopeFilter_(user) {
+  if (user.role === 'role_admin') return {};
+  if (user.role === 'role_branch_monitor') return { branchIn: user.allBranches || [] };
+  if (user.role === 'role_teacher_sup' || user.role === 'role_student_sup') return { branch: user.branch };
+  if (user.role === 'role_teacher') return { branch: user.branch, gradesIn: user.grades || [], sectionsIn: user.sections || [] };
+  return { branch: '__none__' }; // 🆕 دور غير مصرَّح — لا يطابق أي شيء
+}
+
+async function handleSearchStudentsForPerformance(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, PERFORMANCE_VIEW_ROLES);
+  const { query, branch, grade, section } = validateBody(z.object({
+    query: z.string().trim().max(100).optional(),
+    branch: z.string().trim().optional(), grade: z.string().trim().optional(), section: z.string().trim().optional(),
+  }), req.body);
+
+  const scope = buildPerformanceScopeFilter_(user);
+  let q = supabaseAdmin.from('students').select('id, name_ar, branch, stage, grade, section').is('deleted_at', null).order('name_ar').limit(50);
+
+  if (scope.branch === '__none__') return res.status(200).json({ success: true, data: [] });
+  if (scope.branch) q = q.eq('branch', scope.branch);
+  if (scope.branchIn) q = q.in('branch', scope.branchIn);
+  if (scope.gradesIn) q = q.in('grade', scope.gradesIn);
+  if (scope.sectionsIn) q = q.in('section', scope.sectionsIn);
+
+  if (branch) q = q.eq('branch', branch);
+  if (grade) q = q.eq('grade', grade);
+  if (section) q = q.eq('section', section);
+  if (query) q = q.ilike('name_ar', `%${query}%`);
+
+  const { data, error } = await q;
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+async function handleGetStudentPerformanceReport(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, PERFORMANCE_VIEW_ROLES);
+  const { studentId } = validateBody(z.object({ studentId: z.string().min(1) }), req.body);
+
+  const { data: student, error: sError } = await supabaseAdmin.from('students').select('*').eq('id', studentId).single();
+  if (sError || !student) {
+    const e = new Error('الطالب غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  assertStudentInPerformanceScope_(user, student);
+
+  const [{ data: grades }, { data: behavior }, { data: attendance }] = await Promise.all([
+    supabaseAdmin.from('grade_aggregation_results').select('*').eq('student_id', studentId).order('subject'),
+    supabaseAdmin.from('student_behavior').select('type, points').eq('student_id', studentId),
+    supabaseAdmin.from('attendance').select('status').eq('person_id', studentId).eq('person_type', 'student'),
+  ]);
+
+  const behaviorSummary = (behavior || []).reduce((acc, b) => {
+    acc[b.type === 'positive' ? 'positivePoints' : 'negativePoints'] += Number(b.points) || 0;
+    return acc;
+  }, { positivePoints: 0, negativePoints: 0 });
+
+  const attendanceSummary = (attendance || []).reduce((acc, a) => { acc[a.status] = (acc[a.status] || 0) + 1; return acc; }, {});
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      student: { id: student.id, name: student.name_ar, branch: student.branch, stage: student.stage, grade: student.grade, section: student.section },
+      grades: grades || [], behaviorSummary, attendanceSummary,
+    },
+  });
+}
+
+async function handleGetClassPerformanceSummary(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, PERFORMANCE_VIEW_ROLES);
+  const d = validateBody(z.object({
+    branch: z.string().trim().min(1), stage: z.string().trim().min(1), grade: z.string().trim().min(1), section: z.string().trim().min(1),
+  }), req.body);
+
+  assertStudentInPerformanceScope_(user, d); // 🆕 نفس منطق فحص النطاق (يقبل كائن بحقول branch/grade/section)
+
+  const { data: students, error: sError } = await supabaseAdmin.from('students').select('id, name_ar')
+    .eq('branch', d.branch).eq('stage', d.stage).eq('grade', d.grade).eq('section', d.section).is('deleted_at', null).order('name_ar');
+  if (sError) throw sError;
+
+  const ids = (students || []).map((s) => s.id);
+  let grades = [];
+  if (ids.length) {
+    const { data: gradesData, error: gError } = await supabaseAdmin.from('grade_aggregation_results').select('student_id, subject, final_grade').in('student_id', ids);
+    if (gError) throw gError;
+    grades = gradesData || [];
+  }
+
+  const bySubject = {};
+  grades.forEach((g) => { bySubject[g.subject] = true; });
+  const subjects = Object.keys(bySubject).sort();
+
+  const roster = (students || []).map((s) => {
+    const studentGrades = grades.filter((g) => g.student_id === s.id);
+    const average = studentGrades.length ? Math.round((studentGrades.reduce((sum, g) => sum + Number(g.final_grade), 0) / studentGrades.length) * 100) / 100 : null;
+    return { studentId: s.id, studentName: s.name_ar, average, bySubject: Object.fromEntries(studentGrades.map((g) => [g.subject, g.final_grade])) };
+  });
+
+  return res.status(200).json({ success: true, data: { subjects, roster } });
 }
 
 export default createRouter({
@@ -980,4 +1160,7 @@ export default createRouter({
   listAssignmentRoster: handleListAssignmentRoster,
   saveAssignmentGrade: handleSaveAssignmentGrade,
   deleteAssignmentGrade: handleDeleteAssignmentGrade,
+  searchStudentsForPerformance: handleSearchStudentsForPerformance,
+  getStudentPerformanceReport: handleGetStudentPerformanceReport,
+  getClassPerformanceSummary: handleGetClassPerformanceSummary,
 });
