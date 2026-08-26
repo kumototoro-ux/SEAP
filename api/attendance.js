@@ -96,7 +96,7 @@ async function handleSave(req, res) {
   const rows = d.entries.map((e) => ({
     person_id: e.personId, person_type: d.personType, date: d.date, status: e.status,
     branch: d.branch, grade: d.grade || null, section: d.section || null, target_role: d.targetRole || null,
-    recorded_by: user.id, recorded_at: new Date().toISOString(),
+    recorded_by: user.id, recorded_by_emp_id: user.id, recorded_at: new Date().toISOString(), // 🆕 recorded_by_emp_id عمود ذو معنى حقيقي (مرجع الموظف) — كان يُترَك فارغاً بالخطأ
     term_id: termId, term: termName, week_id: weekId, week: weekLabel, // 🆕
   }));
 
