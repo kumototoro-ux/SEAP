@@ -775,7 +775,12 @@ input[type="date"], input[type="time"], input[type="datetime-local"] { direction
 .clock-tick { stroke: #C9A24B; stroke-width: 1.4; }
 .clock-tick-major { stroke: #E8CD82; stroke-width: 2.6; }
 .clock-brand-text { fill: #C9A24B; font-size: 11px; font-weight: 800; letter-spacing: 1px; font-family: 'Manrope', sans-serif; }
-.clock-hand { stroke-linecap: round; transform-origin: 100px 100px; }
+/* 🆕 إصلاح: transform-origin أُزيلت نهائياً — كانت تتعارض مع سمة SVG
+   transform="rotate(angle cx cy)" الموجودة أصلاً بكل عقرب (بعض المتصفحات
+   تحسب نقطة الدوران بشكل خاطئ بسبب هذا التعارض، فيخرج العقرب عن الساعة
+   تماماً بدل الدوران حول المركز). rotate() بصيغتها الثلاثية (زاوية، س، ص)
+   تكفي وحدها لتحديد نقطة الدوران بدقة — لا حاجة لأي transform-origin إطلاقاً. */
+.clock-hand { stroke-linecap: round; }
 .clock-hand-hour { stroke: #E8CD82; stroke-width: 5; }
 .clock-hand-minute { stroke: #E8CD82; stroke-width: 3.5; }
 .clock-hand-second { stroke: #C4483A; stroke-width: 1.5; }
