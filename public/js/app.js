@@ -2004,14 +2004,22 @@ async function saveSiteInfoHandler() {
 }
 
 async function saveSettingsListHandler(camelKey, snakeKey) {
+  // 🆕 إصلاح مهم: لو المستخدم كتب قيمة جديدة بحقل الإضافة لكن ضغط "حفظ"
+  // مباشرة بلا الضغط على Enter أولاً، كانت القيمة تُهمَل تماماً بصمت
+  // (يظهر "تم الحفظ بنجاح" لكن بالقائمة القديمة فقط). الآن نتحقق من
+  // محتوى حقل الإضافة أولاً ونضيفه تلقائياً قبل الحفظ لو كان غير فارغ.
+  const addInput = document.getElementById(`ssAdd_${camelKey}`);
+  if (addInput && addInput.value.trim()) {
+    const pendingVal = addInput.value.trim();
+    if (!siteSettingsListsState[camelKey].includes(pendingVal)) siteSettingsListsState[camelKey].push(pendingVal);
+    addInput.value = '';
+  }
+
   const values = siteSettingsListsState[camelKey];
   if (!values.length) { showToast('يجب إدخال قيمة واحدة على الأقل', 'error'); return; }
   try {
     await apiCall('settings', { method: 'POST', body: { action: 'updateList', listKey: snakeKey, values } });
     showToast('تم الحفظ بنجاح', 'success');
-    // 🆕 إصلاح: كان يكتفي بإبطال التخزين المؤقّت بلا إعادة جلب فعلي —
-    // فتظهر القائمة بلا تحديث حتى يُحدَّث المتصفح كاملاً يدوياً. الآن
-    // يُعاد الجلب والتصيير فوراً بنفس اللحظة.
     cachedSettings = null;
     const freshSettings = await getSettingsOnce();
     SETTINGS_LIST_KEYS.forEach((k) => { siteSettingsListsState[k.camel] = [...(freshSettings[k.camel] || [])]; });
