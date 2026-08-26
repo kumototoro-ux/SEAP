@@ -35,4 +35,6 @@ const ICONS = {
   schedule: () => icon('<rect x="3" y="3.5" width="18" height="17" rx="2"/><path d="M3 8.5h18"/><path d="M9 8.5v12"/><path d="M15 8.5v12"/>'),
   // 🆕 أيقونة التكاليف والمهام — صفحة جديدة
   clipboard: () => icon('<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1"/><path d="M9 11h6"/><path d="M9 15h6"/><path d="M9 19h3"/>'),
+  // 🆕 أيقونة إحصائيات التسجيل — صفحة جديدة
+  chart: () => icon('<path d="M4 20V10"/><path d="M12 20V4"/><path d="M20 20v-7"/><path d="M2 20h20"/>'),
 };
