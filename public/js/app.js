@@ -121,9 +121,8 @@ const SIDEBAR_GROUPS = [
   { type: 'single', key: 'home' },
   { type: 'group', label: 'التقويم والجداول', icon: 'calendar', items: ['academicCalendar', 'schedules'] },
   { type: 'group', label: 'التكاليف والدرجات', icon: 'clipboard', items: ['assignments', 'assignmentGrades'] },
-  { type: 'single', key: 'studentPerformance' },
   { type: 'single', key: 'messages' },
-  { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
+  { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior', 'studentPerformance'] }, // 🆕 أُدمجت هنا بدل رابط منفصل
   { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
   { type: 'group', label: 'التقارير والإحصائيات', icon: 'chart', items: ['reports', 'registrationStats'] }, // 🆕 جُمِعا معاً بدل تفرّقهما
   { type: 'group', label: 'الإدارة والإعدادات', icon: 'settingsGear', items: ['auditLog', 'siteSettings'] },
@@ -479,6 +478,7 @@ function navigate(view) {
 // تظهر فقط لو المستخدم يملك صلاحية وصول لتلك الصفحة فعلياً (pagesForCurrentUser).
 
 let homeClockIntervalId = null;
+let homeClockMode = 'analog'; // 🆕 'analog' | 'digital' — يُتحكَّم فيه بزر التبديل
 
 function renderHomeView() {
   if (homeClockIntervalId) { clearInterval(homeClockIntervalId); homeClockIntervalId = null; } // 🆕 يمنع تراكم مؤقّتات لو تكرّر فتح الرئيسية
@@ -496,7 +496,8 @@ function renderHomeView() {
 
     <div class="home-top-row">
       <div class="card home-clock-card">
-        <div id="luxuryClockArea"></div>
+        <button type="button" id="clockModeToggle" class="clock-mode-toggle" title="تبديل نوع عرض الساعة">${ICONS.chevronDown()} ${homeClockMode === 'analog' ? 'رقمية' : 'تناظرية'}</button>
+        <div id="clockDisplayArea"></div>
         <div class="home-clock-date" id="homeClockDate"></div>
       </div>
       <div class="card home-calendar-card" id="homeCalendarCard">
@@ -505,19 +506,58 @@ function renderHomeView() {
     </div>
 
     <div class="kpi-cards-row" id="homeKpiCardsRow" style="margin-top:16px"></div>
+    <div class="home-widgets-row" id="homeWidgetsRow" style="margin-top:16px"></div>
   `;
 
-  document.getElementById('luxuryClockArea').innerHTML = buildLuxuryClockSVG();
-  updateLuxuryClock();
-  homeClockIntervalId = setInterval(updateLuxuryClock, 1000);
-  document.getElementById('homeClockDate').textContent = now.toLocaleDateString('ar-SA-u-ca-gregory', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+  renderClockTick(); // 🆕 يرسم أول نبضة فوراً (بلا انتظار الثانية الأولى من المؤقّت)
+  homeClockIntervalId = setInterval(renderClockTick, 1000);
+
+  document.getElementById('clockModeToggle').addEventListener('click', () => {
+    homeClockMode = homeClockMode === 'analog' ? 'digital' : 'analog';
+    document.getElementById('clockModeToggle').innerHTML = `${ICONS.chevronDown()} ${homeClockMode === 'analog' ? 'رقمية' : 'تناظرية'}`;
+    renderClockTick();
+  });
 
   loadHomeCalendarWidget();
   loadHomeKpiCards(pages);
+  loadHomeExtraWidgets(pages);
 }
 
-/** 🆕 ساعة تناظرية فاخرة (إطار ذهبي، قرص داكن) — SVG بحت، بلا صور خارجية */
-function buildLuxuryClockSVG() {
+/** 🆕 يرسم نبضة ساعة كاملة من الصفر كل ثانية (بلا الاعتماد على تعديل
+ * سمة transform لعنصر موجود مسبقاً — كانت هذي الطريقة السابقة تفشل بصمت
+ * أحياناً حسب توقيت ربط العنصر). التصيير الكامل هنا مضمون 100% لأن زاوية
+ * كل عقرب تُحسَب وتُدمَج مباشرة بنص SVG وقت إنشائه، لا بعده. */
+function renderClockTick() {
+  const area = document.getElementById('clockDisplayArea');
+  if (!area) return; // المستخدم غادر الصفحة — clearInterval يتكفّل بإيقاف المؤقّت لاحقاً
+  const now = new Date();
+
+  if (homeClockMode === 'digital') {
+    const hh = String(now.getHours()).padStart(2, '0');
+    const mm = String(now.getMinutes()).padStart(2, '0');
+    const ss = String(now.getSeconds()).padStart(2, '0');
+    area.innerHTML = `
+      <div class="digital-clock">
+        <div class="digital-clock-time">${hh}<span class="digital-clock-colon">:</span>${mm}<span class="digital-clock-colon">:</span>${ss}</div>
+        <div class="digital-clock-brand">مِرقاة</div>
+      </div>`;
+  } else {
+    area.innerHTML = buildLuxuryClockSVG(now);
+  }
+
+  const dateEl = document.getElementById('homeClockDate');
+  if (dateEl) dateEl.textContent = now.toLocaleDateString('ar-SA-u-ca-gregory', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+/** 🆕 ساعة تناظرية فاخرة (إطار ذهبي، قرص داكن) — SVG بحت، بلا صور خارجية.
+ * زاوية كل عقرب تُحسَب وتُدمَج مباشرة داخل سمة transform وقت بناء النص —
+ * لا اعتماد على تعديلها لاحقاً بجافاسكربت منفصل (كان هذا سبب توقّف الحركة). */
+function buildLuxuryClockSVG(now) {
+  const h = now.getHours() % 12, m = now.getMinutes(), s = now.getSeconds();
+  const hourAngle = h * 30 + m * 0.5;
+  const minuteAngle = m * 6 + s * 0.1;
+  const secondAngle = s * 6;
+
   const ticks = Array.from({ length: 12 }).map((_, i) => {
     const angle = i * 30;
     const isMajor = i % 3 === 0;
@@ -534,23 +574,11 @@ function buildLuxuryClockSVG() {
       <circle cx="100" cy="100" r="84" class="clock-face"/>
       ${ticks}
       <text x="100" y="60" text-anchor="middle" class="clock-brand-text">مِرقاة</text>
-      <line id="clockHourHand" x1="100" y1="100" x2="100" y2="60" class="clock-hand clock-hand-hour"/>
-      <line id="clockMinuteHand" x1="100" y1="100" x2="100" y2="42" class="clock-hand clock-hand-minute"/>
-      <line id="clockSecondHand" x1="100" y1="112" x2="100" y2="36" class="clock-hand clock-hand-second"/>
+      <line x1="100" y1="100" x2="100" y2="60" class="clock-hand clock-hand-hour" transform="rotate(${hourAngle} 100 100)"/>
+      <line x1="100" y1="100" x2="100" y2="42" class="clock-hand clock-hand-minute" transform="rotate(${minuteAngle} 100 100)"/>
+      <line x1="100" y1="112" x2="100" y2="36" class="clock-hand clock-hand-second" transform="rotate(${secondAngle} 100 100)"/>
       <circle cx="100" cy="100" r="5" class="clock-center"/>
     </svg>`;
-}
-
-function updateLuxuryClock() {
-  const now = new Date();
-  const h = now.getHours() % 12, m = now.getMinutes(), s = now.getSeconds();
-  const hourHand = document.getElementById('clockHourHand');
-  const minuteHand = document.getElementById('clockMinuteHand');
-  const secondHand = document.getElementById('clockSecondHand');
-  if (!hourHand) return; // 🆕 المستخدم غادر الصفحة — clearInterval يتكفّل بإيقافه لاحقاً، هذا فقط حارس دفاعي
-  hourHand.setAttribute('transform', `rotate(${h * 30 + m * 0.5} 100 100)`);
-  minuteHand.setAttribute('transform', `rotate(${m * 6 + s * 0.1} 100 100)`);
-  secondHand.setAttribute('transform', `rotate(${s * 6} 100 100)`);
 }
 
 /** 🆕 تقويم دراسي مصغَّر — الفصل الحالي + أقرب الأحداث القادمة */
@@ -639,6 +667,75 @@ async function loadHomeKpiCards(pages) {
 
   row.querySelectorAll('[data-home-kpi]').forEach((el) => {
     el.addEventListener('click', () => navigate(el.getAttribute('data-home-kpi')));
+  });
+}
+
+/** 🆕 قسمان إضافيان يملآن الفراغ أسفل الرئيسية — آخر الأنشطة (أدمن فقط)
+ * وأقرب التكاليف/الاختبارات استحقاقاً (لمن يملك صلاحية صفحة التكاليف) */
+async function loadHomeExtraWidgets(pages) {
+  const row = document.getElementById('homeWidgetsRow');
+  const widgets = [];
+
+  if (pages.includes('auditLog')) {
+    try {
+      const log = await apiCall('audit-log', { method: 'POST', body: { action: 'list' } });
+      const recent = log.slice(0, 6);
+      widgets.push(`
+        <div class="card home-widget-card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h3 style="margin:0">آخر الأنشطة</h3>
+            <a data-view="auditLog" style="font-size:12px;color:var(--primary);cursor:pointer;text-decoration:none">عرض الكل ←</a>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+            ${recent.map((r) => `
+              <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
+                <span style="font-size:12px">${escapeHtml(r.action)} — ${escapeHtml(r.emp_name || '')}</span>
+                <span style="font-size:11px;color:var(--text-muted)">${new Date(r.created_at).toLocaleString('ar-SA-u-ca-gregory')}</span>
+              </div>`).join('') || '<p style="color:#888;font-size:12px">لا يوجد نشاط بعد</p>'}
+          </div>
+        </div>`);
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+
+  if (pages.includes('assignments')) {
+    try {
+      const assignments = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignments' } });
+      const upcoming = assignments.filter((a) => a.due_at && new Date(a.due_at) >= new Date())
+        .sort((a, b) => new Date(a.due_at) - new Date(b.due_at)).slice(0, 5);
+      widgets.push(`
+        <div class="card home-widget-card">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h3 style="margin:0">أقرب المواعيد استحقاقاً</h3>
+            <a data-view="assignments" style="font-size:12px;color:var(--primary);cursor:pointer;text-decoration:none">عرض الكل ←</a>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+            ${upcoming.map((a) => `
+              <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
+                <span style="font-size:12px">${escapeHtml(a.title)}</span>
+                <span style="font-size:11px;color:var(--text-muted)">${new Date(a.due_at).toLocaleDateString('ar-SA-u-ca-gregory')}</span>
+              </div>`).join('') || '<p style="color:#888;font-size:12px">لا مواعيد قادمة حالياً</p>'}
+          </div>
+        </div>`);
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+
+  if (pages.includes('registrationStats')) {
+    try {
+      const stats = await apiCall('academic-config', { method: 'POST', body: { action: 'getRegistrationStats' } });
+      if (stats.studentsByGrade?.length) {
+        widgets.push(`
+          <div class="card home-widget-card">
+            <h3 style="margin:0">الطلاب حسب الصف</h3>
+            ${renderBarChartSVG(stats.studentsByGrade.map((r) => ({ label: r.label, value: r.count })), '#7B5FB8')}
+          </div>`);
+      }
+    } catch (e) { /* تجاهل بصمت */ }
+  }
+
+  if (!widgets.length) { row.style.display = 'none'; return; }
+  row.innerHTML = widgets.join('');
+  row.querySelectorAll('[data-view]').forEach((el) => {
+    el.addEventListener('click', () => navigate(el.getAttribute('data-view')));
   });
 }
 
@@ -2754,39 +2851,44 @@ async function loadPerfDashboard() {
 }
 
 /** 🆕 رسم بياني شريطي أفقي — SVG خالص، بلا أي مكتبة خارجية، يُعاد استخدامه بأي لوحة إحصاءات قادمة */
+/** 🆕 رسم بياني شريطي أفقي — HTML/CSS بحت (لا SVG) — يتكيّف بشكل صحيح
+ * مع أي عرض حاوية بلا أي تشوّه أو تمدّد غير متناسب. كان بصيغة SVG بحجم
+ * viewBox ثابت (400 وحدة) مع width:100% — على الشاشات العريضة كان يتمدد
+ * كل شيء (الخط والأشرطة معاً) بنسبة ضخمة، فيتحول الشريط لكبسولة عملاقة
+ * تقريباً فارغة. هذا التصميم الجديد يبقي حجم الخط ثابتاً دائماً، وفقط
+ * عرض الشريط نفسه يتغيّر بنسبة مئوية — النمط الصحيح لأي عرض حاوية. */
 function renderBarChartSVG(items, color) {
   if (!items.length) return '<p style="color:#888">لا بيانات كافية بعد</p>';
-  const maxVal = Math.max(100, ...items.map((i) => i.value));
-  const rowHeight = 34;
-  const svgHeight = items.length * rowHeight + 10;
-  const chartWidth = 100; // نسبة مئوية من عرض الحاوية
+  const maxVal = Math.max(1, ...items.map((i) => i.value));
 
   return `
-    <svg viewBox="0 0 400 ${svgHeight}" style="width:100%;height:auto" xmlns="http://www.w3.org/2000/svg">
-      ${items.map((item, i) => {
-        const y = i * rowHeight;
-        const barWidth = Math.max(4, (item.value / maxVal) * 260);
+    <div class="hbar-chart">
+      ${items.map((item) => {
+        const pct = Math.max(3, (item.value / maxVal) * 100);
+        const label = item.label.length > 26 ? item.label.slice(0, 26) + '…' : item.label;
         return `
-          <text x="398" y="${y + 14}" text-anchor="end" font-size="11" font-weight="700" fill="#202124">${escapeHtml(item.label.length > 18 ? item.label.slice(0, 18) + '…' : item.label)}</text>
-          <rect x="${398 - 260}" y="${y + 18}" width="260" height="10" rx="5" fill="#EDEDEA"></rect>
-          <rect x="${398 - barWidth}" y="${y + 18}" width="${barWidth}" height="10" rx="5" fill="${color}"></rect>
-          <text x="${398 - 265}" y="${y + 27}" text-anchor="end" font-size="10" font-weight="800" fill="${color}">${item.value}</text>
-        `;
+          <div class="hbar-row">
+            <span class="hbar-label" title="${escapeHtml(item.label)}">${escapeHtml(label)}</span>
+            <div class="hbar-track"><div class="hbar-fill" style="width:${pct}%;background:${color}"></div></div>
+            <span class="hbar-value" style="color:${color}">${item.value}</span>
+          </div>`;
       }).join('')}
-    </svg>`;
+    </div>`;
 }
 
-/** 🆕 مقياس دائري بسيط (Gauge) — للمتوسط العام */
+/** 🆕 مقياس دائري بسيط (Gauge) — للمتوسط العام. أُضيفت نسبة نصّية بمنتصف
+ * الحلقة (كانت تظهر كحلقة فارغة بلا رقم، فتبدو "غير مكتملة" بصرياً) */
 function renderGaugeSVG(value) {
   const pct = Math.max(0, Math.min(100, value)) / 100;
-  const radius = 42, circumference = 2 * Math.PI * radius;
+  const radius = 50, circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - pct);
   const color = value >= 85 ? '#2F7A4D' : value >= 65 ? '#B8860B' : '#C4483A';
   return `
-    <svg width="100" height="100" viewBox="0 0 100 100" style="flex-shrink:0">
-      <circle cx="50" cy="50" r="${radius}" fill="none" stroke="#EDEDEA" stroke-width="10"></circle>
-      <circle cx="50" cy="50" r="${radius}" fill="none" stroke="${color}" stroke-width="10" stroke-linecap="round"
-        stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 50 50)"></circle>
+    <svg width="130" height="130" viewBox="0 0 130 130" style="flex-shrink:0">
+      <circle cx="65" cy="65" r="${radius}" fill="none" stroke="#EDEDEA" stroke-width="12"></circle>
+      <circle cx="65" cy="65" r="${radius}" fill="none" stroke="${color}" stroke-width="12" stroke-linecap="round"
+        stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" transform="rotate(-90 65 65)"></circle>
+      <text x="65" y="72" text-anchor="middle" font-size="26" font-weight="800" fill="${color}" font-family="Manrope, sans-serif">${Math.round(value)}</text>
     </svg>`;
 }
 
