@@ -1,10 +1,12 @@
 // api/attendance.js
 // =====================================================================
-// إجراءات: listForDate, save (تسجيل جماعي ليوم واحد), updateOne (تعديل
-// حالة شخص واحد). يخدم حضور الطلاب وحضور الموظفين معاً — الفرق فقط
-// بـ personType بالطلب. منطق الصلاحيات هنا مطابق تماماً لخارطة الأدوار
-// الموثَّقة بـ public/js/app.js (فوق PAGE_REGISTRY) — أي تعديل مستقبلي
-// لهذا الملف يجب يرجع لتلك الوثيقة أولاً.
+// 🆕 إعادة بناء كاملة — يعمل الآن على جدول attendance_records الجديد
+// النظيف (بدل الجدول القديم المليء بمفاجآت NOT NULL). إجراءات:
+// listForDate, save (تسجيل جماعي ليوم واحد — Upsert حقيقي يمنع أي
+// تكرار على مستوى قاعدة البيانات نفسها)، updateOne (تعديل شخص واحد).
+// يخدم حضور الطلاب وحضور الموظفين معاً — الفرق فقط بـpersonType.
+// منطق الصلاحيات هنا مطابق تماماً لخارطة الأدوار الموثَّقة بـ
+// public/js/app.js (فوق PAGE_REGISTRY).
 // =====================================================================
 
 import { supabaseAdmin } from '../lib/supabaseAdmin.js';
@@ -14,8 +16,9 @@ import { validateBody, saveAttendanceSchema, updateAttendanceSchema, listAttenda
 
 const EDIT_WINDOW_MINUTES = 30;
 
-/** 🆕 يتحقّق: هل هذا المستخدم مصرَّح له يتعامل مع حضور هذا النوع (طالب/موظف) بهذا الفرع/الصف؟
- * يرمي خطأ 403 لو لا. يُرجِع { unrestricted: boolean } — true يعني بلا قيد وقت بالتعديل. */
+/** يتحقّق: هل هذا المستخدم مصرَّح له يتعامل مع حضور هذا النوع (طالب/موظف)
+ * بهذا الفرع/الصف؟ يرمي خطأ 403 لو لا. يُرجِع { unrestricted: boolean }
+ * — true يعني بلا قيد وقت بالتعديل. */
 function checkAttendanceAccess(user, { personType, branch, grade, section, targetRole }) {
   if (user.role === 'role_admin') return { unrestricted: true };
 
@@ -23,11 +26,11 @@ function checkAttendanceAccess(user, { personType, branch, grade, section, targe
     if (user.role === 'role_teacher') {
       const teachesThis = (user.grades || []).includes(grade) && (user.sections || []).includes(section);
       if (!teachesThis) { const e = new Error('غير مصرَّح لك بهذا الصف/الشعبة'); e.statusCode = 403; throw e; }
-      return { unrestricted: false }; // 🆕 المعلم: نافذة 30 دقيقة فقط
+      return { unrestricted: false }; // المعلم: نافذة 30 دقيقة فقط
     }
     if (user.role === 'role_student_sup') {
       if (user.branch !== branch) { const e = new Error('غير مصرَّح لك بهذا الفرع'); e.statusCode = 403; throw e; }
-      return { unrestricted: true }; // 🆕 مشرف الطلاب: بلا قيد وقت
+      return { unrestricted: true }; // مشرف الطلاب: بلا قيد وقت
     }
   }
 
@@ -50,39 +53,43 @@ function checkAttendanceAccess(user, { personType, branch, grade, section, targe
   throw e;
 }
 
+/** يجيب الفصل والأسبوع الدراسي الفعليين اللي يقع فيهما تاريخ معيّن —
+ * الربط الحقيقي المطلوب بين الحضور والتقويم الدراسي (وبالتالي بالعام
+ * الدراسي أيضاً عبر academic_terms.academic_year). لو التاريخ خارج أي
+ * فصل/أسبوع مُعرَّف، يُرجِع قيماً فارغة بلا رمي خطأ — التحضير يستمر بلا
+ * توقّف حتى لو التقويم غير مكتمل بعد. */
+async function resolveTermAndWeek_(dateStr) {
+  const { data: term } = await supabaseAdmin.from('academic_terms').select('id, name, academic_year')
+    .lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
+  if (!term) return { termId: null, termName: null, academicYear: null, weekId: null, weekLabel: null };
+
+  const { data: week } = await supabaseAdmin.from('academic_weeks').select('id, label, week_number')
+    .eq('term_id', term.id).lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
+
+  return {
+    termId: term.id, termName: term.name, academicYear: term.academic_year,
+    weekId: week ? week.id : null, weekLabel: week ? (week.label || `الأسبوع ${week.week_number}`) : null,
+  };
+}
+
 /* -------------------- عرض حضور يوم معيّن -------------------- */
 async function handleListForDate(req, res) {
   const user = requireAuth(req);
-  const { date, personType, branch, grade, section, targetRole } = validateBody(listAttendanceForDateSchema, req.body); // 🆕 كان يُقرَأ بلا تحقق
+  const { date, personType, branch, grade, section, targetRole } = validateBody(listAttendanceForDateSchema, req.body);
   checkAttendanceAccess(user, { personType, branch, grade, section, targetRole });
 
-  let query = supabaseAdmin.from('attendance').select('*').eq('date', date).eq('person_type', personType).eq('branch', branch);
+  let query = supabaseAdmin.from('attendance_records').select('*').eq('date', date).eq('person_type', personType).eq('branch', branch);
   if (grade) query = query.eq('grade', grade);
   if (section) query = query.eq('section', section);
   if (targetRole) query = query.eq('target_role', targetRole);
 
   const { data, error } = await query;
   if (error) throw error;
-  return res.status(200).json({ success: true, data });
-}
 
-/** 🆕 يجيب الفصل والأسبوع الدراسي الفعليين اللي يقع فيهما تاريخ معيّن —
- * الربط الحقيقي المطلوب بين الحضور والتقويم الدراسي (لا الاكتفاء بترك
- * الحقول فارغة). لو التاريخ خارج أي فصل/أسبوع مُعرَّف (مثلاً التقويم لسه
- * ما اكتمل)، يُرجِع قيم فارغة بلا رمي أي خطأ — تسجيل الحضور يستمر بلا
- * توقّف حتى لو التقويم غير مكتمل بعد. */
-async function resolveTermAndWeek_(dateStr) {
-  const { data: term } = await supabaseAdmin.from('academic_terms').select('id, name')
-    .lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
-  if (!term) return { termId: null, termName: null, weekId: null, weekLabel: null };
-
-  const { data: week } = await supabaseAdmin.from('academic_weeks').select('id, label, week_number')
-    .eq('term_id', term.id).lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
-
-  return {
-    termId: term.id, termName: term.name,
-    weekId: week ? week.id : null, weekLabel: week ? (week.label || `الأسبوع ${week.week_number}`) : null,
-  };
+  // 🆕 يُرجَع سياق الفصل/الأسبوع الدراسي مع القائمة — يظهر بالواجهة كتأكيد
+  // مرئي على الربط الفعلي بالتقويم الدراسي والعام الدراسي
+  const context = await resolveTermAndWeek_(date);
+  return res.status(200).json({ success: true, data: { records: data, context } });
 }
 
 /* -------------------- تسجيل حضور جماعي ليوم واحد -------------------- */
@@ -91,24 +98,26 @@ async function handleSave(req, res) {
   const d = validateBody(saveAttendanceSchema, req.body);
   checkAttendanceAccess(user, d);
 
-  const { termId, termName, weekId, weekLabel } = await resolveTermAndWeek_(d.date); // 🆕 ربط حقيقي بالتقويم الدراسي
+  const { termId, weekId } = await resolveTermAndWeek_(d.date);
 
   const rows = d.entries.map((e) => ({
     person_id: e.personId, person_type: d.personType, date: d.date, status: e.status,
-    branch: d.branch, grade: d.grade || null, section: d.section || null, target_role: d.targetRole || null,
-    recorded_by: user.id, recorded_by_emp_id: user.id, recorded_at: new Date().toISOString(), // 🆕 recorded_by_emp_id عمود ذو معنى حقيقي (مرجع الموظف) — كان يُترَك فارغاً بالخطأ
-    term_id: termId, term: termName, week_id: weekId, week: weekLabel, // 🆕
+    branch: d.branch, stage: d.stage || null, grade: d.grade || null, section: d.section || null, target_role: d.targetRole || null,
+    term_id: termId, week_id: weekId,
+    recorded_by: user.id, recorded_at: new Date().toISOString(),
+    updated_by: user.id, updated_at: new Date().toISOString(),
   }));
 
-  // 🆕 upsert — لو الشخص مسجَّل حضوره أصلاً بنفس اليوم، يُحدَّث بدل تكرار الصف (يطابق قيد UNIQUE بالجدول)
-  const { error } = await supabaseAdmin.from('attendance').upsert(rows, { onConflict: 'person_id,person_type,date' });
+  // 🆕 Upsert حقيقي مدعوم بقيد UNIQUE بقاعدة البيانات نفسها — يمنع أي
+  // تكرار أو تعارض لسجل نفس الشخص بنفس اليوم، مهما حصل بمستوى الكود
+  const { error } = await supabaseAdmin.from('attendance_records').upsert(rows, { onConflict: 'person_id,person_type,date' });
   if (error) throw error;
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
     action: `تسجيل حضور ${d.personType === 'student' ? 'طلاب' : 'موظفين'}`, details: { date: d.date, count: rows.length, branch: d.branch }, branch: user.branch,
   });
-  return res.status(200).json({ success: true, data: true });
+  return res.status(200).json({ success: true, data: { savedCount: rows.length } });
 }
 
 /* -------------------- تعديل حالة شخص واحد -------------------- */
@@ -116,14 +125,14 @@ async function handleUpdateOne(req, res) {
   const user = requireAuth(req);
   const { id, status } = validateBody(updateAttendanceSchema, req.body);
 
-  const { data: existing } = await supabaseAdmin.from('attendance').select('*').eq('id', id).maybeSingle();
+  const { data: existing } = await supabaseAdmin.from('attendance_records').select('*').eq('id', id).maybeSingle();
   if (!existing) { const e = new Error('السجل غير موجود'); e.statusCode = 404; throw e; }
 
   const access = checkAttendanceAccess(user, {
     personType: existing.person_type, branch: existing.branch, grade: existing.grade, section: existing.section, targetRole: existing.target_role,
   });
 
-  // 🆕 نافذة الـ30 دقيقة — تُطبَّق فقط لو access.unrestricted === false (المعلم تحديداً)
+  // نافذة الـ30 دقيقة — تُطبَّق فقط لو access.unrestricted === false (المعلم تحديداً)
   if (!access.unrestricted) {
     const minutesPassed = (Date.now() - new Date(existing.recorded_at).getTime()) / 60000;
     if (minutesPassed > EDIT_WINDOW_MINUTES) {
@@ -133,7 +142,7 @@ async function handleUpdateOne(req, res) {
     }
   }
 
-  const { error } = await supabaseAdmin.from('attendance').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await supabaseAdmin.from('attendance_records').update({ status, updated_by: user.id, updated_at: new Date().toISOString() }).eq('id', id);
   if (error) throw error;
 
   await supabaseAdmin.from('audit_log').insert({
@@ -146,22 +155,22 @@ async function handleUpdateOne(req, res) {
 /* -------------------- قوائم مصغَّرة للتحضير فقط (اسم + معرِّف، بلا أي بيانات حساسة) -------------------- */
 async function handleListStudentRoster(req, res) {
   const user = requireAuth(req);
-  const { branch, grade, section } = validateBody(listStudentRosterSchema, req.body); // 🆕 كان يُقرَأ بلا تحقق
+  const { branch, grade, section } = validateBody(listStudentRosterSchema, req.body);
   checkAttendanceAccess(user, { personType: 'student', branch, grade, section });
 
-  const { data, error } = await supabaseAdmin.from('students').select('id, name_ar, grade, section')
-    .eq('branch', branch).eq('grade', grade).eq('section', section).is('deleted_at', null);
+  const { data, error } = await supabaseAdmin.from('students').select('id, name_ar, stage, grade, section')
+    .eq('branch', branch).eq('grade', grade).eq('section', section).is('deleted_at', null).order('name_ar');
   if (error) throw error;
   return res.status(200).json({ success: true, data });
 }
 
 async function handleListStaffRoster(req, res) {
   const user = requireAuth(req);
-  const { branch, targetRole } = validateBody(listStaffRosterSchema, req.body); // 🆕 كان يُقرَأ بلا تحقق
+  const { branch, targetRole } = validateBody(listStaffRosterSchema, req.body);
   checkAttendanceAccess(user, { personType: 'employee', branch, targetRole });
 
   const { data, error } = await supabaseAdmin.from('employees').select('id, name_ar, role')
-    .eq('branch', branch).eq('role', targetRole).is('deleted_at', null);
+    .eq('branch', branch).eq('role', targetRole).is('deleted_at', null).order('name_ar');
   if (error) throw error;
   return res.status(200).json({ success: true, data });
 }
