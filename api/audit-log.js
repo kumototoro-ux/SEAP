@@ -109,10 +109,32 @@ async function handleListMyThreads(req, res) {
   return res.status(200).json({ success: true, data: threads });
 }
 
+/** 🆕 يتحقّق أن المستخدم طرف فعلي بهذا الموضوع (مُرسِل أصلي أو مستلم مُدرَج)
+ * قبل السماح بقراءته أو الرد عليه — كانت ثغرة IDOR حقيقية: أي threadId
+ * كان يُقبَل بلا أي تحقق، يعني أي موظف يقدر يقرأ محادثات غيره بتخمين الرقم. */
+async function assertThreadParticipant_(user, threadId) {
+  const { data: thread, error } = await supabaseAdmin.from('chat_threads').select('sender_id').eq('id', threadId).single();
+  if (error || !thread) {
+    const e = new Error('الموضوع غير موجود');
+    e.statusCode = 404;
+    throw e;
+  }
+  if (thread.sender_id === user.id) return;
+
+  const { data: recipient } = await supabaseAdmin.from('chat_recipients').select('id')
+    .eq('thread_id', threadId).eq('recipient_id', user.id).eq('recipient_type', 'employee').maybeSingle();
+  if (!recipient) {
+    const e = new Error('لا تملك صلاحية الوصول لهذا الموضوع');
+    e.statusCode = 403;
+    throw e;
+  }
+}
+
 /* ===================== فتح موضوع (يعلِّم رسائلي كمقروءة، وينظِّف الردود المنتهية) ===================== */
 async function handleGetThread(req, res) {
   const user = requireAuth(req);
   const { threadId } = req.body;
+  await assertThreadParticipant_(user, threadId); // 🆕 إصلاح ثغرة IDOR
 
   await cleanupExpiredReplies(threadId);
 
@@ -132,6 +154,7 @@ async function handleGetThread(req, res) {
 async function handleReply(req, res) {
   const user = requireAuth(req);
   const d = validateBody(z.object({ threadId: z.union([z.string(), z.number()]), body: z.string().min(1).max(2000) }), req.body);
+  await assertThreadParticipant_(user, d.threadId); // 🆕 إصلاح ثغرة IDOR
 
   if (await isSenderBlocked(user.id, 'employee')) {
     const e = new Error('حسابك محظور من إرسال الرسائل حالياً — تواصل مع الأدمن');
