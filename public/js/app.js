@@ -3948,6 +3948,60 @@ function formatDateAr(dateStr) {
   } catch (e) { return dateStr; }
 }
 
+/* ===================== 🆕 حل جذري لتشوّه عرض حقول التاريخ بالجوال ===================== */
+// منتقي التاريخ الأصلي (<input type="date">) له عطل موثَّق تحديداً
+// بمتصفح Chrome على أندرويد الحقيقي (لا يظهر بمحاكي المطوّر) داخل صفحات
+// RTL — يعرض الأرقام بترتيب مبعثر (direction/unicode-bidi بمستوى CSS لا
+// يكفيان لحله بالكامل، لأن المتصفح نفسه يتحكّم بتنسيق القيمة الداخلي
+// لهذا النوع من الحقول، لا الصفحة). الحل الجذري الوحيد: التوقّف عن
+// الاعتماد على عرض المتصفح للقيمة إطلاقاً — الحقل الأصلي يبقى شفافاً
+// تماماً (لفتح منتقي التاريخ الأصلي عند الضغط، ولحفظ القيمة بصيغة
+// YYYY-MM-DD الصحيحة عند الاختيار)، بينما نعرض **نحن** القيمة بتنسيق
+// عربي واضح بطبقة منفصلة فوقه بالكامل تحت تحكّمنا الكامل.
+// يُطبَّق تلقائياً على أي حقل تاريخ حالي أو مستقبلي بلا أي تعديل يدوي
+// لكل صفحة على حدة — عبر مراقب DOM واحد يُفعَّل مرة عند بدء التطبيق.
+
+function wrapDateInputWithArabicDisplay_(input) {
+  if (input.dataset.wrapped) return;
+  input.dataset.wrapped = 'true';
+
+  const wrap = document.createElement('div');
+  wrap.className = 'date-display-wrap';
+  input.parentNode.insertBefore(wrap, input);
+  wrap.appendChild(input);
+
+  const display = document.createElement('div');
+  display.className = 'date-display-overlay';
+  wrap.appendChild(display);
+
+  const isDateTime = input.type === 'datetime-local';
+  const updateDisplay = () => {
+    if (!input.value) { display.textContent = input.placeholder || 'اختر التاريخ'; display.classList.add('is-empty'); return; }
+    display.classList.remove('is-empty');
+    if (isDateTime) {
+      const [datePart, timePart] = input.value.split('T');
+      display.textContent = `${formatDateAr(datePart)} — ${(timePart || '').slice(0, 5)}`;
+    } else {
+      display.textContent = formatDateAr(input.value);
+    }
+  };
+  updateDisplay();
+  input.addEventListener('input', updateDisplay);
+  input.addEventListener('change', updateDisplay);
+}
+
+function scanAndWrapDateInputs_() {
+  document.querySelectorAll('input[type="date"]:not([data-wrapped]), input[type="datetime-local"]:not([data-wrapped])').forEach(wrapDateInputWithArabicDisplay_);
+}
+
+function initDateInputAutoWrap_() {
+  scanAndWrapDateInputs_(); // فحص أولي فور بدء التطبيق
+  // 🆕 مراقب DOM واحد يغطّي كل الصفحات الحالية والمستقبلية بلا استثناء —
+  // بديل عن تعديل عشرات نماذج الإدخال واحداً واحداً
+  const observer = new MutationObserver(() => scanAndWrapDateInputs_());
+  observer.observe(document.body, { childList: true, subtree: true });
+}
+
 let calendarViewDate = new Date(); // 🆕 المرساة الزمنية للعرض الشهري/الأسبوعي
 let calendarViewMode = 'month';    // 🆕 'month' | 'week' | 'term'
 let calendarSelectedTermId = null; // 🆕 الفصل المختار بعرض "الفصل الدراسي كامل"
@@ -6102,6 +6156,7 @@ async function renderRegistrationStatsView() {
 /* ===================== نقطة الانطلاق ===================== */
 
 document.addEventListener('DOMContentLoaded', () => {
+  initDateInputAutoWrap_(); // 🆕 يغطّي كل حقول التاريخ الحالية والمستقبلية تلقائياً
   const savedToken = localStorage.getItem('mirqat_token');
   const savedUser = localStorage.getItem('mirqat_user');
   if (savedToken && savedUser) {
