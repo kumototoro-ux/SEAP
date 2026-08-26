@@ -2007,6 +2007,12 @@ function renderSettingsGeneralSection(content) {
     <h2 style="margin-top:0">اسم المدرسة والشعار</h2>
     <div class="field"><label>اسم المدرسة</label><input id="ss_schoolName" type="text" value="${escapeHtml(cachedSettings.schoolName || '')}"></div>
     <div class="field"><label>رابط الشعار</label><input id="ss_logoUrl" type="text" value="${escapeHtml(cachedSettings.logoUrl || '')}"></div>
+    <h2 style="margin-top:24px">الإجراءات المسموح بها</h2>
+    <div class="field" style="display:flex;align-items:center;gap:10px;flex-direction:row-reverse;justify-content:flex-end">
+      <label for="ss_allowMessageImages" style="margin:0;cursor:pointer">السماح بإرسال الصور في المراسلات</label>
+      <input type="checkbox" id="ss_allowMessageImages" ${cachedSettings.allowMessageImages ? 'checked' : ''} style="width:20px;height:20px;cursor:pointer">
+    </div>
+    <p style="color:#888;font-size:11.5px;margin-top:-6px">حالياً يُدعَم فقط رابط صورة مستضافة مسبقاً (مثل Google Drive) — لا رفع ملفات مباشر بعد</p>
     <button type="button" id="saveSiteInfoBtn">حفظ</button>`;
   document.getElementById('saveSiteInfoBtn').addEventListener('click', saveSiteInfoHandler);
 }
@@ -2030,7 +2036,7 @@ async function saveSiteInfoHandler() {
   const btn = document.getElementById('saveSiteInfoBtn');
   btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
   try {
-    await apiCall('settings', { method: 'POST', body: { action: 'updateSite', schoolName: document.getElementById('ss_schoolName').value.trim(), logoUrl: document.getElementById('ss_logoUrl').value.trim() } });
+    await apiCall('settings', { method: 'POST', body: { action: 'updateSite', schoolName: document.getElementById('ss_schoolName').value.trim(), logoUrl: document.getElementById('ss_logoUrl').value.trim(), allowMessageImages: document.getElementById('ss_allowMessageImages').checked } });
     showToast('تم حفظ بيانات المدرسة بنجاح', 'success');
     cachedSettings = null;
   } catch (e) { showToast(e.message, 'error'); }
@@ -3417,11 +3423,28 @@ async function openThreadView(threadId) {
   });
 }
 
-/** 🆕 نافذة إنشاء رسالة جديدة — قابلة للاستدعاء من أي مكان بالتطبيق (بطاقة موظف، تقييم، سلوك...)
+/** 🆕 نافذة إنشاء رسالة جديدة — أُعيد بناؤها بالكامل: بحث ذكي مقيَّد
+ * بالصلاحية من الخادم نفسه (بدل جلب كل الموظفين — كان محصوراً بالأدمن
+ * أصلاً ومكسوراً عملياً لغير الأدمن)، مع دعم مراسلة الطلاب/أولياء
+ * الأمور لمن يملك صلاحية ذلك، وتدفّق خاص لمراقب الفروع (فرع ← نوع ←
+ * بحث)، وتقييد صارم للمعلم (صفوفه فقط).
  * prefill اختياري: { recipients: [{id,type}], subject, contextType, contextId } */
+const MESSAGE_TYPE_LABELS_ = { employee: 'موظف', student: 'طالب', parent: 'ولي أمر' };
+
+function messageableTypesForRole_() {
+  const role = APP.user.role;
+  if (role === 'role_admin') return ['employee', 'student', 'parent'];
+  if (['role_branch_monitor', 'role_student_sup', 'Admission', 'role_teacher'].includes(role)) return ['employee', 'student', 'parent'];
+  return ['employee']; // بقية الأدوار: موظفين فقط بفرعهم
+}
+
 function openComposeMessageModal(prefill) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay show';
+  const availableTypes = messageableTypesForRole_();
+  const isBranchMonitor = APP.user.role === 'role_branch_monitor';
+  const branchOptions = isBranchMonitor ? (APP.user.allBranches || [APP.user.branch]) : [];
+
   overlay.innerHTML = `
     <div class="modal-card">
       <div class="modal-header">
@@ -3431,7 +3454,11 @@ function openComposeMessageModal(prefill) {
       <div class="modal-body">
         <div class="field"><label>الموضوع</label><input type="text" id="compose_subject" value="${escapeHtml(prefill?.subject || '')}"></div>
         ${!prefill?.recipients ? `
-        <div class="field"><label>المستلم (اكتب اسم موظف)</label><input type="text" id="compose_recipientSearch" placeholder="ابحث بالاسم..."></div>
+        <div class="af-grid-row">
+          ${availableTypes.length > 1 ? `<div class="field"><label>نوع المستلم</label><select id="compose_recipientType">${availableTypes.map((t) => `<option value="${t}">${MESSAGE_TYPE_LABELS_[t]}</option>`).join('')}</select></div>` : ''}
+          ${isBranchMonitor ? `<div class="field"><label>الفرع</label><select id="compose_branchSelect">${branchOptions.map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}</select></div>` : ''}
+        </div>
+        <div class="field"><label>المستلم (بالاسم أو رقم الهوية)</label><input type="text" id="compose_recipientSearch" placeholder="ابحث..."></div>
         <div id="compose_recipientResults" class="student-search-results"></div>
         <div id="compose_selectedRecipient" style="margin:8px 0;font-size:12.5px;color:var(--text-muted)">لم يُحدَّد مستلم بعد</div>
         ` : `<p style="font-size:12.5px;color:var(--text-muted)">سيصل هذا لجهة الاختصاص المرتبطة بهذا السجل</p>`}
@@ -3448,26 +3475,31 @@ function openComposeMessageModal(prefill) {
   let selectedRecipients = prefill?.recipients || [];
 
   if (!prefill?.recipients) {
-    document.getElementById('compose_recipientSearch').addEventListener('input', async (e) => {
-      const q = e.target.value.trim().toLowerCase();
+    let searchDebounce;
+    const doSearch = async () => {
+      const q = document.getElementById('compose_recipientSearch').value.trim();
       const box = document.getElementById('compose_recipientResults');
       if (q.length < 2) { box.innerHTML = ''; box.classList.remove('show'); return; }
-      if (!APP.allEmployees || !APP.allEmployees.length) {
-        try { APP.allEmployees = await apiCall('employees', { method: 'POST', body: { action: 'list' } }); } catch (err) { APP.allEmployees = []; }
-      }
-      const matches = APP.allEmployees.filter((emp) => emp.name_ar.toLowerCase().includes(q)).slice(0, 6);
+      const personType = document.getElementById('compose_recipientType')?.value || availableTypes[0];
+      const branch = document.getElementById('compose_branchSelect')?.value;
+      let matches;
+      try {
+        matches = await apiCall('audit-log', { method: 'POST', body: { action: 'searchMessageRecipients', personType, branch, query: q } });
+      } catch (e) { matches = []; }
       box.classList.add('show');
-      box.innerHTML = matches.map((emp) => `<div class="search-result-item" data-pick-recipient="${escapeHtml(emp.id)}"><div class="search-result-label">${escapeHtml(emp.name_ar)}</div></div>`).join('') || '<p style="padding:10px;color:#aaa;font-size:12px">لا نتائج</p>';
+      box.innerHTML = matches.map((p) => `<div class="search-result-item" data-pick-recipient="${escapeHtml(p.id)}"><div class="search-result-label">${escapeHtml(p.name_ar)}${p.grade ? ` — ${escapeHtml(p.grade)}/${escapeHtml(p.section)}` : ''}</div></div>`).join('') || '<p style="padding:10px;color:#aaa;font-size:12px">لا نتائج</p>';
       box.querySelectorAll('[data-pick-recipient]').forEach((el) => {
         el.addEventListener('click', () => {
-          const emp = APP.allEmployees.find((x) => x.id === el.getAttribute('data-pick-recipient'));
-          selectedRecipients = [{ id: emp.id, type: 'employee' }];
-          document.getElementById('compose_selectedRecipient').textContent = 'المستلم: ' + emp.name_ar;
+          const person = matches.find((x) => x.id === el.getAttribute('data-pick-recipient'));
+          selectedRecipients = [{ id: person.id, type: personType }];
+          document.getElementById('compose_selectedRecipient').textContent = `المستلم: ${person.name_ar} (${MESSAGE_TYPE_LABELS_[personType]})`;
           box.innerHTML = ''; box.classList.remove('show');
           document.getElementById('compose_recipientSearch').value = '';
         });
       });
-    });
+    };
+    document.getElementById('compose_recipientSearch').addEventListener('input', () => { clearTimeout(searchDebounce); searchDebounce = setTimeout(doSearch, 350); });
+    document.getElementById('compose_recipientType')?.addEventListener('change', () => { selectedRecipients = []; document.getElementById('compose_selectedRecipient').textContent = 'لم يُحدَّد مستلم بعد'; });
   }
 
   document.getElementById('composeSendBtn').addEventListener('click', async () => {
