@@ -76,6 +76,7 @@ const PAGE_REGISTRY = {
   assignments: { label: 'التكاليف والمهام', icon: 'clipboard', render: renderAssignmentsView }, // 🆕
   assignmentGrades: { label: 'رصد الدرجات', icon: 'guardians', render: renderAssignmentGradesView }, // 🆕
   studentPerformance: { label: 'أداء الطلاب', icon: 'students', render: renderStudentPerformanceView }, // 🆕
+  registrationStats: { label: 'إحصائيات التسجيل', icon: 'chart', render: renderRegistrationStatsView }, // 🆕
   employees: { label: 'الموظفون', icon: 'employees', render: renderEmployeesView },
   students: { label: 'الطلاب', icon: 'students', render: renderStudentsView },
   parents: { label: 'أولياء الأمور', icon: 'guardians', render: renderParentsView },
@@ -100,11 +101,12 @@ const ROLE_PAGES = {
   // 🆕 'assignments' (تكاليف/مهام): أدمن+معلم (كتابة) + 3 أدوار إشراف (عرض فقط).
   // 🆕 'assignmentGrades' (رصد الدرجات): أدمن ومعلم فقط — لا أحد غيرهما.
   // 🆕 'studentPerformance' (أداء الطلاب): كل الأدوار الخمسة بنطاق مختلف لكل دور (محدَّد بالخادم)
-  role_admin: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'studentPerformance', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
+  // 🆕 'registrationStats' (إحصائيات التسجيل): أدمن (كل الفروع) + Admission (فرعها فقط)
+  role_admin: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'studentPerformance', 'registrationStats', 'messages', 'studentAttendance', 'staffAttendance', 'studentBehavior', 'performance', 'reports', 'employees', 'students', 'parents', 'familyAccounts', 'users', 'auditLog', 'siteSettings'],
   role_teacher: ['home', 'academicCalendar', 'schedules', 'assignments', 'assignmentGrades', 'studentPerformance', 'messages', 'studentAttendance', 'performance'],
   role_student_sup: ['home', 'academicCalendar', 'schedules', 'assignments', 'studentPerformance', 'messages', 'studentAttendance', 'studentBehavior', 'performance', 'reports', 'students', 'parents', 'familyAccounts'],
   role_teacher_sup: ['home', 'academicCalendar', 'schedules', 'assignments', 'studentPerformance', 'messages', 'staffAttendance', 'performance', 'reports'],
-  Admission: ['home', 'academicCalendar', 'messages', 'students', 'parents', 'familyAccounts'],
+  Admission: ['home', 'academicCalendar', 'registrationStats', 'messages', 'students', 'parents', 'familyAccounts'],
   role_branch_monitor: ['home', 'academicCalendar', 'schedules', 'assignments', 'studentPerformance', 'messages', 'staffAttendance', 'performance', 'reports'],
 };
 
@@ -117,13 +119,13 @@ function pagesForCurrentUser() {
  * تصبح فارغة لدور معيّن (كل صفحاتها غير مصرَّح له بها) تختفي تلقائياً بلا أثر. */
 const SIDEBAR_GROUPS = [
   { type: 'single', key: 'home' },
-  { type: 'group', label: 'التقويم والجداول', icon: 'calendar', items: ['academicCalendar', 'schedules'] }, // 🆕 أُعيد تنظيمها بمجموعة بدل روابط متفرّقة
-  { type: 'group', label: 'التكاليف والدرجات', icon: 'clipboard', items: ['assignments', 'assignmentGrades'] }, // 🆕
-  { type: 'single', key: 'studentPerformance' }, // 🆕
+  { type: 'group', label: 'التقويم والجداول', icon: 'calendar', items: ['academicCalendar', 'schedules'] },
+  { type: 'group', label: 'التكاليف والدرجات', icon: 'clipboard', items: ['assignments', 'assignmentGrades'] },
+  { type: 'single', key: 'studentPerformance' },
   { type: 'single', key: 'messages' },
   { type: 'group', label: 'الطلاب وأولياء الأمور', icon: 'students', items: ['students', 'parents', 'familyAccounts', 'studentAttendance', 'studentBehavior'] },
   { type: 'group', label: 'الموظفون', icon: 'employees', items: ['employees', 'staffAttendance', 'performance', 'users'] },
-  { type: 'single', key: 'reports' },
+  { type: 'group', label: 'التقارير والإحصائيات', icon: 'chart', items: ['reports', 'registrationStats'] }, // 🆕 جُمِعا معاً بدل تفرّقهما
   { type: 'group', label: 'الإدارة والإعدادات', icon: 'settingsGear', items: ['auditLog', 'siteSettings'] },
 ];
 
@@ -2628,6 +2630,133 @@ function renderGaugeSVG(value) {
     </svg>`;
 }
 
+/** 🆕 رسم دائري (Donut) بسيط لتوزيع نسب — لتحليل الحضور/الحالات بالتقارير الاحترافية */
+function renderDonutChartSVG(segments) {
+  if (!total) return '<p style="color:#888">لا بيانات كافية بعد</p>';
+  const radius = 60, circumference = 2 * Math.PI * radius;
+  let cursor = 0;
+  const arcs = segments.map((seg) => {
+    const fraction = seg.value / total;
+    const dash = fraction * circumference;
+    const arc = `<circle cx="80" cy="80" r="${radius}" fill="none" stroke="${seg.color}" stroke-width="22"
+      stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${-cursor}" transform="rotate(-90 80 80)"></circle>`;
+    cursor += dash;
+    return arc;
+  }).join('');
+
+  return `
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <svg width="160" height="160" viewBox="0 0 160 160">${arcs}</svg>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${segments.map((seg) => `
+          <div style="display:flex;align-items:center;gap:8px;font-size:12.5px">
+            <span style="width:10px;height:10px;border-radius:999px;background:${seg.color};display:inline-block"></span>
+            ${escapeHtml(seg.label)}: <strong>${seg.value}</strong> (${Math.round((seg.value / total) * 100)}%)
+          </div>`).join('')}
+      </div>
+    </div>`;
+}
+
+/* ===================== 🆕 قشرة التقرير الاحترافي (Preview + PDF + مشاركة) ===================== */
+// تُستخدَم من كل صفحات التقارير (صفحة التقارير، أداء الطلاب، مستقبلاً
+// أداء الموظفين) — رأس موحَّد (شعار المنصة/المدرسة + الفرع + مُعِد
+// التقرير + التاريخ)، علامة مائية رادعة (بلا ادّعاء منع لقطة شاشة
+// حقيقي — هذا غير ممكن تقنياً على الويب لأي موقع بالعالم)، وأزرار
+// تحميل PDF/مشاركة/طباعة تُصدِر الصفحة **كما هي بالضبط** (نفس جودة
+// العرض الأولي) عبر html2pdf.js (تصوير DOM فعلي، لا إعادة صياغة).
+
+async function showProfessionalReportShell({ title, branchLabel, contentHtml }) {
+  const settings = await getSettingsOnce();
+  const schoolName = settings.schoolName || 'مِرقاة';
+  const logoHtml = settings.logoUrl
+    ? `<img src="${escapeHtml(settings.logoUrl)}" style="height:44px;max-width:160px;object-fit:contain">`
+    : mirqatLogo(36);
+  const now = new Date();
+  const dateStr = now.toLocaleString('ar-SA-u-ca-gregory');
+  const preparerName = APP.user.fullName;
+  const preparerRole = ROLE_LABELS_AR[APP.user.role] || APP.user.role;
+
+  document.getElementById('reportShellOverlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'report-shell-overlay';
+  overlay.id = 'reportShellOverlay';
+  overlay.oncontextmenu = () => false; // 🆕 إجراء رادع بسيط (ليس منعاً حقيقياً)
+  overlay.innerHTML = `
+    <div class="report-shell-toolbar">
+      <button type="button" id="reportCloseBtn" class="btn-outline-sm">${ICONS.close()} إغلاق</button>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" id="reportPrintBtn" class="btn-outline-sm">طباعة</button>
+        <button type="button" id="reportShareBtn" class="btn-outline-sm">مشاركة</button>
+        <button type="button" id="reportDownloadBtn">${ICONS.plus()} تحميل PDF</button>
+      </div>
+    </div>
+    <div class="report-shell-scroll">
+      <div class="report-shell-page" id="reportShellPage">
+        <div class="report-watermark">${escapeHtml(preparerName)} — ${dateStr}</div>
+        <div class="report-shell-header">
+          <div class="report-shell-header-brand">
+            ${logoHtml}
+            <div>
+              <div class="report-shell-platform-name">${escapeHtml(schoolName)}</div>
+              <div class="report-shell-sub">تقرير رسمي صادر عن نظام إدارة المدرسة</div>
+            </div>
+          </div>
+          <div class="report-shell-meta">
+            <div><strong>الفرع:</strong> ${escapeHtml(branchLabel || 'كل الفروع')}</div>
+            <div><strong>مُعِد التقرير:</strong> ${escapeHtml(preparerName)} — ${escapeHtml(preparerRole)}</div>
+            <div><strong>تاريخ الإصدار:</strong> ${dateStr}</div>
+          </div>
+        </div>
+        <h2 class="report-shell-title">${escapeHtml(title)}</h2>
+        <div class="report-shell-body">${contentHtml}</div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  document.getElementById('reportCloseBtn').addEventListener('click', () => overlay.remove());
+  document.getElementById('reportPrintBtn').addEventListener('click', () => window.print());
+  document.getElementById('reportDownloadBtn').addEventListener('click', () => downloadReportAsPdf(title));
+  document.getElementById('reportShareBtn').addEventListener('click', () => shareReportPdf(title));
+}
+
+function buildReportPdfWorker_(filename) {
+  const page = document.getElementById('reportShellPage');
+  return window.html2pdf().set({
+    margin: 8,
+    filename,
+    image: { type: 'jpeg', quality: 0.98 },
+    html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+    jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+  }).from(page);
+}
+
+async function downloadReportAsPdf(title) {
+  const btn = document.getElementById('reportDownloadBtn');
+  if (typeof window.html2pdf !== 'function') { showToast('مكتبة PDF لم تُحمَّل بعد — تحقّق من الاتصال بالإنترنت وحاول مجدداً', 'error'); return; }
+  btn.disabled = true; btn.textContent = 'جارِ التجهيز...';
+  try {
+    await buildReportPdfWorker_(`${title}.pdf`).save();
+  } catch (e) { showToast('تعذّر توليد PDF', 'error'); }
+  finally { btn.disabled = false; btn.innerHTML = `${ICONS.plus()} تحميل PDF`; }
+}
+
+async function shareReportPdf(title) {
+  const btn = document.getElementById('reportShareBtn');
+  if (typeof window.html2pdf !== 'function') { showToast('مكتبة PDF لم تُحمَّل بعد — تحقّق من الاتصال بالإنترنت وحاول مجدداً', 'error'); return; }
+  btn.disabled = true; btn.textContent = 'جارِ التجهيز...';
+  try {
+    const pdfBlob = await buildReportPdfWorker_(`${title}.pdf`).outputPdf('blob');
+    const file = new File([pdfBlob], `${title}.pdf`, { type: 'application/pdf' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title }); // 🆕 يفتح قائمة مشاركة الجهاز الفعلية (واتساب/تلغرام/غيره) — تدعمها أغلب المتصفحات بالجوال
+    } else {
+      showToast('مشاركة الملف مباشرة غير مدعومة بهذا المتصفح — استخدم زر "تحميل PDF" ثم أرفقه يدوياً بالتطبيق', 'error');
+    }
+  } catch (e) {
+    if (e.name !== 'AbortError') showToast('تعذّرت المشاركة', 'error');
+  } finally { btn.disabled = false; btn.textContent = 'مشاركة'; }
+}
+
 /* -------------------- معايير التقييم (أدمن) — مُجمَّعة بصناديق حسب الدور، مع تعديل -------------------- */
 const PERF_ROLE_LABELS_ = { role_teacher: 'معلم', role_teacher_sup: 'مشرف معلمين', role_student_sup: 'مشرف طلاب', role_branch_monitor: 'مراقب فروع' };
 let perfEditingCriterionId = null;
@@ -3126,29 +3255,34 @@ async function generateReportHandler() {
 
 function renderReportResult(result, domain) {
   const area = document.getElementById('reportResultArea');
-  const now = new Date().toLocaleString('ar');
+  const branchesUsed = collectCheckedValues('.rep-branch-cb');
+  const branchLabel = branchesUsed.length ? branchesUsed.join('، ') : 'كل الفروع المتاحة';
+
   area.innerHTML = `
-    <div class="card report-print-header">
-      <div style="display:flex;align-items:center;gap:10px">${mirqatLogo(28)}<span style="font-weight:800;font-size:15px">مِرقاة</span></div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:6px">
-        نوع التقرير: ${escapeHtml(REPORT_DOMAIN_LABELS_[domain])} — أُنشئ بواسطة ${escapeHtml(APP.user.fullName)} (${escapeHtml(ROLE_LABELS_AR[APP.user.role] || APP.user.role)}) — ${now}
-      </div>
+    <div class="card">
+      <p style="color:#888;font-size:12.5px;margin:0 0 12px">تم إنشاء التقرير بنجاح — اضغط الزر لعرضه بشكل احترافي جاهز للطباعة والمشاركة</p>
+      <button type="button" id="openReportShellBtn" style="width:100%">${ICONS.plus()} عرض التقرير الاحترافي</button>
     </div>
-    <div class="card" style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+    <div class="card" style="margin-top:14px">
       ${renderGaugeSVG(result.average)}
-      <div>
+      <div style="margin-top:10px">
         <div style="font-size:12.5px;color:var(--text-muted);font-weight:700">المتوسط العام</div>
         <div style="font-size:28px;font-weight:800;color:var(--primary)">${result.average}<span style="font-size:14px;color:var(--text-muted)"> ${escapeHtml(result.unit)}</span></div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${result.count} سجلاً</div>
       </div>
-      <button type="button" id="printReportBtn" style="width:auto;margin-right:auto">${ICONS.plus()} طباعة / حفظ PDF</button>
-    </div>
-    <div class="card">
-      <h3>التفاصيل الكاملة</h3>
-      ${renderBarChartSVG(result.rows.map((r) => ({ label: r.name || '—', value: r.score })), '#7B5FB8')}
     </div>`;
 
-  document.getElementById('printReportBtn').addEventListener('click', () => window.print());
+  document.getElementById('openReportShellBtn').addEventListener('click', () => {
+    const contentHtml = `
+      <div class="report-stats-row">
+        <div class="report-stat-box">${renderGaugeSVG(result.average)}<div style="margin-top:8px;font-weight:800;font-size:15px">${result.average} ${escapeHtml(result.unit)}</div><div style="font-size:11.5px;color:var(--text-muted)">المتوسط العام</div></div>
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${result.count}</div><div style="font-size:11.5px;color:var(--text-muted)">إجمالي السجلات</div></div>
+      </div>
+      <h3 style="margin-top:24px">التفاصيل الكاملة (ترتيب تنازلي)</h3>
+      ${renderBarChartSVG([...result.rows].sort((a, b) => b.score - a.score).map((r) => ({ label: r.name || '—', value: r.score })), '#7B5FB8')}`;
+
+    showProfessionalReportShell({ title: REPORT_DOMAIN_LABELS_[domain], branchLabel, contentHtml });
+  });
 }
 
 /* ===================== أدوات مساعدة عامة ===================== */
@@ -5434,7 +5568,27 @@ async function loadStudentPerformanceReport(studentId) {
       <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:12.5px;color:var(--text-muted)">
         ${Object.entries(attendanceSummary).map(([status, count]) => `<span>${escapeHtml(status)}: <strong style="color:var(--text)">${count}</strong></span>`).join('') || '<span>لا يوجد سجل حضور بعد</span>'}
       </div>
+
+      <button type="button" id="openStudentReportShellBtn" style="width:100%;margin-top:16px">${ICONS.plus()} إصدار تقرير احترافي</button>
     </div>`;
+
+  document.getElementById('openStudentReportShellBtn').addEventListener('click', () => {
+    const attendanceSegments = Object.entries(attendanceSummary).map(([status, count], i) => ({
+      label: status, value: count, color: ['#2F7A4D', '#C4483A', '#B8860B', '#7B5FB8', '#3E7CB1'][i % 5],
+    }));
+    const contentHtml = `
+      <div class="report-stats-row">
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${avgGrade !== null ? avgGrade : '—'}</div><div style="font-size:11.5px;color:var(--text-muted)">متوسط الدرجات</div></div>
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:#2F7A4D">${behaviorSummary.positivePoints}</div><div style="font-size:11.5px;color:var(--text-muted)">نقاط سلوك إيجابي</div></div>
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:#C4483A">${behaviorSummary.negativePoints}</div><div style="font-size:11.5px;color:var(--text-muted)">نقاط سلوك سلبي</div></div>
+      </div>
+      <h3 style="margin-top:24px">الدرجات حسب المادة</h3>
+      ${grades.length ? renderBarChartSVG(grades.map((g) => ({ label: g.subject, value: Number(g.final_grade) })), '#3E7CB1') : '<p style="color:#888">لا توجد درجات محسوبة بعد</p>'}
+      <h3 style="margin-top:24px">توزيع الحضور</h3>
+      ${attendanceSegments.length ? renderDonutChartSVG(attendanceSegments) : '<p style="color:#888">لا يوجد سجل حضور بعد</p>'}`;
+
+    showProfessionalReportShell({ title: `تقرير أداء الطالب — ${student.name}`, branchLabel: student.branch, contentHtml });
+  });
 }
 
 /* -------------------- ملخّص صف/شعبة كامل -------------------- */
@@ -5493,7 +5647,104 @@ async function loadClassPerformanceSummary() {
             </tr>`).join('')}
         </tbody>
       </table>
+    </div>
+    <button type="button" id="openClassReportShellBtn" style="width:100%;margin-top:14px">${ICONS.plus()} إصدار تقرير احترافي</button>`;
+
+  document.getElementById('openClassReportShellBtn').addEventListener('click', () => {
+    const classAverages = roster.filter((r) => r.average !== null);
+    const classAvg = classAverages.length ? Math.round((classAverages.reduce((s, r) => s + r.average, 0) / classAverages.length) * 100) / 100 : null;
+    const contentHtml = `
+      <div class="report-stats-row">
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${roster.length}</div><div style="font-size:11.5px;color:var(--text-muted)">عدد الطلاب</div></div>
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${classAvg !== null ? classAvg : '—'}</div><div style="font-size:11.5px;color:var(--text-muted)">متوسط الصف العام</div></div>
+      </div>
+      <h3 style="margin-top:24px">ترتيب الطلاب حسب المتوسط</h3>
+      ${renderBarChartSVG([...classAverages].sort((a, b) => b.average - a.average).map((r) => ({ label: r.studentName, value: r.average })), '#3E7CB1')}
+      <h3 style="margin-top:24px">جدول الدرجات التفصيلي</h3>
+      <div class="schedule-grid-wrap">
+        <table class="schedule-table">
+          <thead><tr><th>الطالب</th>${subjects.map((s) => `<th>${escapeHtml(s)}</th>`).join('')}<th>المتوسط</th></tr></thead>
+          <tbody>
+            ${roster.map((r) => `
+              <tr>
+                <td class="schedule-period-label" style="text-align:right">${escapeHtml(r.studentName)}</td>
+                ${subjects.map((s) => `<td class="schedule-cell">${r.bySubject[s] !== undefined ? r.bySubject[s] : '—'}</td>`).join('')}
+                <td class="schedule-cell" style="font-weight:800">${r.average !== null ? r.average : '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
+    const branch = document.getElementById('perfClassBranch').value;
+    const grade = document.getElementById('perfClassGrade').value;
+    const section = document.getElementById('perfClassSection').value;
+    showProfessionalReportShell({ title: `تقرير أداء الصف ${grade} / ${section}`, branchLabel: branch, contentHtml });
+  });
+}
+
+/* ===================== 🆕 صفحة إحصائيات التسجيل (أدمن + إدارة القبول) ===================== */
+// أدمن: كل الفروع (طلاب + أولياء أمور + موظفون). إدارة القبول
+// (Admission): طلاب فرعها فقط. صفحة عرض فقط — بلا أي تعديل — مع زر
+// إصدار تقرير احترافي يستخدم نفس قشرة التقارير الموحَّدة.
+
+async function renderRegistrationStatsView() {
+  const main = document.getElementById('mainContent');
+  main.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  let stats;
+  try {
+    stats = await apiCall('academic-config', { method: 'POST', body: { action: 'getRegistrationStats' } });
+  } catch (e) { main.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`; return; }
+
+  const isAdmin = APP.user.role === 'role_admin';
+
+  main.innerHTML = `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:16px">
+        <h2 style="margin:0">إحصائيات التسجيل</h2>
+        <button type="button" id="openStatsReportBtn">${ICONS.plus()} إصدار تقرير احترافي</button>
+      </div>
+
+      <div class="kpi-cards-row">
+        <div class="kpi-card"><div class="kpi-card-label">إجمالي الطلاب</div><div class="kpi-card-value">${stats.totalStudents}</div></div>
+        ${isAdmin ? `
+          <div class="kpi-card"><div class="kpi-card-label">إجمالي أولياء الأمور</div><div class="kpi-card-value">${stats.totalParents}</div></div>
+          <div class="kpi-card"><div class="kpi-card-label">إجمالي الموظفين</div><div class="kpi-card-value">${stats.totalEmployees}</div></div>` : ''}
+      </div>
+
+      ${isAdmin ? `<h3 style="margin-top:24px">الطلاب حسب الفرع</h3>${renderBarChartSVG(stats.studentsByBranch.map((r) => ({ label: r.label, value: r.count })), '#3E7CB1')}` : ''}
+
+      <h3 style="margin-top:24px">الطلاب حسب الصف${isAdmin ? '' : ' (فرعك)'}</h3>
+      ${renderBarChartSVG(stats.studentsByGrade.map((r) => ({ label: r.label, value: r.count })), '#7B5FB8')}
+
+      <h3 style="margin-top:24px">حالة السداد</h3>
+      ${renderDonutChartSVG(stats.feeStatusBreakdown.map((r, i) => ({ label: r.label, value: r.count, color: ['#2F7A4D', '#C4483A', '#B8860B'][i % 3] })))}
+
+      ${isAdmin ? `
+        <h3 style="margin-top:24px">الموظفون حسب الفرع</h3>
+        ${renderBarChartSVG(stats.employeesByBranch.map((r) => ({ label: r.label, value: r.count })), '#3E7CB1')}
+        <h3 style="margin-top:24px">الموظفون حسب الدور</h3>
+        ${renderBarChartSVG(stats.employeesByRole.map((r) => ({ label: ROLE_LABELS_AR[r.label] || r.label, value: r.count })), '#7B5FB8')}
+        <h3 style="margin-top:24px">أولياء الأمور حسب الفرع</h3>
+        ${renderBarChartSVG(stats.parentsByBranch.map((r) => ({ label: r.label, value: r.count })), '#B8860B')}` : ''}
     </div>`;
+
+  document.getElementById('openStatsReportBtn').addEventListener('click', () => {
+    const contentHtml = `
+      <div class="report-stats-row">
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${stats.totalStudents}</div><div style="font-size:11.5px;color:var(--text-muted)">إجمالي الطلاب</div></div>
+        ${isAdmin ? `
+          <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${stats.totalParents}</div><div style="font-size:11.5px;color:var(--text-muted)">أولياء الأمور</div></div>
+          <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${stats.totalEmployees}</div><div style="font-size:11.5px;color:var(--text-muted)">الموظفون</div></div>` : ''}
+      </div>
+      ${isAdmin ? `<h3 style="margin-top:24px">الطلاب حسب الفرع</h3>${renderBarChartSVG(stats.studentsByBranch.map((r) => ({ label: r.label, value: r.count })), '#3E7CB1')}` : ''}
+      <h3 style="margin-top:24px">الطلاب حسب الصف</h3>
+      ${renderBarChartSVG(stats.studentsByGrade.map((r) => ({ label: r.label, value: r.count })), '#7B5FB8')}
+      <h3 style="margin-top:24px">حالة السداد</h3>
+      ${renderDonutChartSVG(stats.feeStatusBreakdown.map((r, i) => ({ label: r.label, value: r.count, color: ['#2F7A4D', '#C4483A', '#B8860B'][i % 3] })))}`;
+
+    showProfessionalReportShell({ title: 'تقرير إحصائيات التسجيل', branchLabel: isAdmin ? 'كل الفروع' : APP.user.branch, contentHtml });
+  });
 }
 
 /* ===================== نقطة الانطلاق ===================== */
