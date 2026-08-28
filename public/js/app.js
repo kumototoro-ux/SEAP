@@ -3396,10 +3396,12 @@ async function openThreadView(threadId, threadMeta) {
 
   const { close } = showDetailModal('المحادثة', null, []);
   const body = document.getElementById('modalBodyContent');
-  // 🆕 زر "فتح التعديل" — يظهر فقط للأدمن، وفقط لو الموضوع طلب إعادة فتح درجة فعلياً
+  // 🆕 زر "فتح التعديل/الكشف" — يظهر فقط للأدمن، وفقط لو الموضوع مرتبط فعلياً بطلب إعادة فتح
   const isGradeReopenRequest = APP.user.role === 'role_admin' && threadMeta?.context_type === 'grade_reopen_request';
+  const isSheetReopenRequest = APP.user.role === 'role_admin' && threadMeta?.context_type === 'sheet_reopen_request';
   body.innerHTML = `
-    ${isGradeReopenRequest ? `<button type="button" id="reopenGradeBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">🔓 فتح التعديل ليوم كامل للمعلم</button>` : ''}
+    ${isGradeReopenRequest ? `<button type="button" id="reopenGradeBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">${ICONS.lock()} فتح التعديل ليوم كامل للمعلم</button>` : ''}
+    ${isSheetReopenRequest ? `<button type="button" id="reopenSheetBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">${ICONS.lock()} فتح الكشف ليوم كامل للمعلم</button>` : ''}
     <div id="threadMessagesArea" style="max-height:320px;overflow-y:auto;margin-bottom:14px"></div>
     <div class="student-search-input-wrap">
       <input type="text" id="threadReplyInput" placeholder="اكتب ردّك...">
@@ -3414,7 +3416,18 @@ async function openThreadView(threadId, threadMeta) {
         await apiCall('academic-config', { method: 'POST', body: { action: 'reopenGradeEdit', gradeId: threadMeta.context_id } });
         showToast('تم فتح التعديل للمعلم ليوم كامل بنجاح', 'success');
         btn.textContent = '✅ تم الفتح';
-      } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = '🔓 فتح التعديل ليوم كامل للمعلم'; }
+      } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'فتح التعديل ليوم كامل للمعلم'; }
+    });
+  }
+  if (isSheetReopenRequest) {
+    document.getElementById('reopenSheetBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('reopenSheetBtn');
+      btn.disabled = true; btn.textContent = 'جارِ الفتح...';
+      try {
+        await apiCall('academic-config', { method: 'POST', body: { action: 'reopenGradingSheet', sheetId: threadMeta.context_id } });
+        showToast('تم فتح الكشف للمعلم ليوم كامل بنجاح', 'success');
+        btn.textContent = '✅ تم الفتح';
+      } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'فتح الكشف ليوم كامل للمعلم'; }
     });
   }
 
@@ -5600,23 +5613,28 @@ async function saveAssignmentSubmit(existingId) {
   finally { btn.disabled = false; btn.textContent = existingId ? 'حفظ التعديلات' : 'نشر'; }
 }
 
-/* ===================== 🆕 صفحة رصد الدرجات (أدمن ومعلم فقط) ===================== */
-// تبويبان: (1) رصد التكاليف/المهام/الاختبارات — فلاتر ثم قائمة ثم كشف
-// درجات. (2) المشاركة والتفاعل — سجل تراكمي مستقل لكل طالب بكل مادة.
+/* ===================== 🆕 صفحة الرصد — أُعيد بناؤها بالكامل: 3 تبويبات ===================== */
+// 1) الرصد: عرض موحَّد لنتائج التكاليف/الاختبارات (تلقائي أو يدوي) +
+//    كشوفات الرصد المباشر (خارج النظام) معاً بمكان واحد.
+// 2) المشاركة والتفاعل: نظام مستقل بأنواع متعددة (مشاركة/إجابة/تفاعل/
+//    نشاط/مبادرة/أداء متميز) — لا مجرد خانة درجة عادية.
+// 3) تعديل الكشوفات: إدارة كشوفات الرصد المباشر (مفتوحة/مغلقة/طلب فتح/
+//    أُعيد فتحها) — قفل احترافي من تصميم الواجهة، لا Emoji.
+// ⚠️ صفحة التكاليف والمهام والاختبارات نفسها لم تُلمَس إطلاقاً — هذي
+// الصفحة فقط تستقبل نتائجها للعرض والمراجعة، بلا أي تدخّل بإنشائها.
 
-let gradesActiveTab = 'assignments'; // 🆕 'assignments' | 'participation'
-let assignmentGradesActiveId = null;
-let gradesFilterCategory = 'all', gradesFilterSubject = '', gradesFilterGrade = '', gradesFilterSection = '';
+let gradesActiveTab = 'record'; // 'record' | 'participation' | 'sheets'
 
 async function renderAssignmentGradesView() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
-        <h2 style="margin:0">رصد الدرجات</h2>
+        <h2 style="margin:0">الرصد والتصحيح</h2>
         <div class="segmented-control" id="gradesTabBar">
-          <button type="button" class="segmented-item ${gradesActiveTab === 'assignments' ? 'active' : ''}" data-grades-tab="assignments">تكاليف / اختبارات</button>
+          <button type="button" class="segmented-item ${gradesActiveTab === 'record' ? 'active' : ''}" data-grades-tab="record">الرصد</button>
           <button type="button" class="segmented-item ${gradesActiveTab === 'participation' ? 'active' : ''}" data-grades-tab="participation">المشاركة والتفاعل</button>
+          <button type="button" class="segmented-item ${gradesActiveTab === 'sheets' ? 'active' : ''}" data-grades-tab="sheets">تعديل الكشوفات</button>
         </div>
       </div>
       <div id="gradesContentArea"></div>
@@ -5626,122 +5644,121 @@ async function renderAssignmentGradesView() {
     btn.addEventListener('click', () => {
       gradesActiveTab = btn.getAttribute('data-grades-tab');
       document.querySelectorAll('#gradesTabBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
-      assignmentGradesActiveId = null;
       renderGradesTabContent();
     });
   });
-
   renderGradesTabContent();
 }
 
 function renderGradesTabContent() {
   if (gradesActiveTab === 'participation') renderParticipationTab();
-  else renderGradesAssignmentsFilters();
+  else if (gradesActiveTab === 'sheets') renderSheetsManagementTab();
+  else renderUnifiedRecordTab();
 }
 
-/* -------------------- تبويب 1: رصد التكاليف/المهام/الاختبارات -------------------- */
+/* -------------------- تبويب 1: الرصد (موحَّد — تكاليف/اختبارات + كشوفات مباشرة) -------------------- */
 
-async function renderGradesAssignmentsFilters() {
+async function renderUnifiedRecordTab() {
   const area = document.getElementById('gradesContentArea');
-  const settings = await getSettingsOnce();
-  const isTeacher = APP.user.role === 'role_teacher';
-  const subjectOptions = isTeacher ? (APP.user.subject || []) : (settings.subjects || []);
-  const gradeOptions = isTeacher ? (APP.user.grades || []) : (settings.grades || []);
-  const sectionOptions = isTeacher ? (APP.user.sections || []) : (settings.sections || []);
-
   area.innerHTML = `
-    <div class="segmented-control" id="gradesCatFilterBar" style="margin-bottom:12px">
-      <button type="button" class="segmented-item ${gradesFilterCategory === 'all' ? 'active' : ''}" data-grades-cat="all">الكل</button>
-      <button type="button" class="segmented-item ${gradesFilterCategory === 'task' ? 'active' : ''}" data-grades-cat="task">تكاليف ومهام</button>
-      <button type="button" class="segmented-item ${gradesFilterCategory === 'exam' ? 'active' : ''}" data-grades-cat="exam">اختبارات</button>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button type="button" id="newSheetBtn">${ICONS.plus()} رصد جديد</button>
     </div>
-    <div class="af-grid-row" style="margin-bottom:12px">
-      <div class="field"><label>المادة</label><select id="gradesFilterSubject"><option value="">الكل</option>${subjectOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
-      <div class="field"><label>الصف</label><select id="gradesFilterGrade"><option value="">الكل</option>${gradeOptions.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
-      <div class="field"><label>الشعبة</label><select id="gradesFilterSection"><option value="">الكل</option>${sectionOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
-    </div>
-    <div id="gradesAssignmentsListArea"></div>`;
+    <div id="unifiedRecordsList"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
 
-  document.querySelectorAll('#gradesCatFilterBar .segmented-item').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      gradesFilterCategory = btn.getAttribute('data-grades-cat');
-      document.querySelectorAll('#gradesCatFilterBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
-      renderGradesAssignmentsList();
-    });
-  });
-  ['gradesFilterSubject', 'gradesFilterGrade', 'gradesFilterSection'].forEach((id) => {
-    document.getElementById(id).addEventListener('change', (e) => {
-      if (id === 'gradesFilterSubject') gradesFilterSubject = e.target.value;
-      if (id === 'gradesFilterGrade') gradesFilterGrade = e.target.value;
-      if (id === 'gradesFilterSection') gradesFilterSection = e.target.value;
-      renderGradesAssignmentsList();
-    });
-  });
-
-  await loadAndRenderGradesAssignmentsList();
+  document.getElementById('newSheetBtn').addEventListener('click', openNewSheetFlow);
+  await loadUnifiedRecordsList();
 }
 
-async function loadAndRenderGradesAssignmentsList() {
-  const area = document.getElementById('gradesAssignmentsListArea');
-  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+async function loadUnifiedRecordsList() {
+  const listArea = document.getElementById('unifiedRecordsList');
+  listArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let records;
   try {
-    APP.gradableAssignments = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignments' } });
-  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
-  renderGradesAssignmentsList();
-}
+    records = await apiCall('academic-config', { method: 'POST', body: { action: 'listUnifiedGradingRecords' } });
+  } catch (e) { listArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
 
-function renderGradesAssignmentsList() {
-  const area = document.getElementById('gradesAssignmentsListArea');
-  const gradable = (APP.gradableAssignments || [])
-    .filter((a) => a.max_score > 0)
-    .filter((a) => gradesFilterCategory === 'all' || a.category === gradesFilterCategory)
-    .filter((a) => !gradesFilterSubject || a.subject === gradesFilterSubject)
-    .filter((a) => !gradesFilterGrade || a.grade === gradesFilterGrade)
-    .filter((a) => !gradesFilterSection || a.section === gradesFilterSection)
-    .sort((a, b) => (b.published_at || '').localeCompare(a.published_at || ''));
+  if (!records.length) { listArea.innerHTML = '<p style="color:#888">لا يوجد رصد بعد — لا من التكاليف ولا كشوفات مباشرة</p>'; return; }
 
-  if (!gradable.length) { area.innerHTML = '<p style="color:#888">لا يوجد تكليف أو اختبار مطابق للفلاتر</p>'; return; }
-
-  area.innerHTML = gradable.map((a) => `
-    <div class="card" style="margin-bottom:10px;cursor:pointer" data-grade-assign="${a.id}">
+  listArea.innerHTML = records.map((r) => `
+    <div class="card" style="margin-bottom:10px;cursor:pointer" data-open-record="${r.source}|${r.id}">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
         <div>
-          <span class="week-type-badge ${a.category === 'exam' ? 'week-type-final' : 'week-type-study'}">${ASSIGNMENT_CATEGORY_LABELS[a.category]}${a.subtype ? ' — ' + escapeHtml(a.subtype) : ''}</span>
-          <span class="week-type-badge ${a.is_auto_gradable ? 'week-type-study' : 'week-type-monthly'}" style="margin-inline-start:4px">${a.is_auto_gradable ? '✅ تصحيح تلقائي' : '✍️ تصحيح يدوي'}</span>
-          <span style="font-weight:700;font-size:13px;margin-inline-start:8px">${escapeHtml(a.title)}</span>
+          <span class="week-type-badge ${r.source === 'assignment' ? (r.isAutoGradable ? 'week-type-study' : 'week-type-monthly') : 'week-type-final'}">
+            ${r.source === 'assignment' ? (r.isAutoGradable ? '✅ تصحيح تلقائي' : '✍️ تصحيح يدوي') : '📝 رصد مباشر'}
+          </span>
+          ${r.source === 'sheet' && !r.isOpen ? `<span style="color:#C4483A;display:inline-flex;align-items:center;gap:3px;font-size:11px;margin-inline-start:6px">${ICONS.lock()} مغلق</span>` : ''}
+          <span style="font-weight:700;font-size:13px;margin-inline-start:8px">${escapeHtml(r.title)}</span>
         </div>
-        <span style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(a.grade)}/${escapeHtml(a.section)} — ${a.participants_count} مرصود من ${a.max_score}</span>
+        <span style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(r.subject)} — ${escapeHtml(r.grade)}/${escapeHtml(r.section)} — ${r.studentsGraded}/${r.studentsTotal} مرصود من ${r.maxScore}</span>
       </div>
     </div>`).join('');
 
-  area.querySelectorAll('[data-grade-assign]').forEach((card) => {
-    card.addEventListener('click', () => { assignmentGradesActiveId = card.getAttribute('data-grade-assign'); renderGradesRoster(); });
+  listArea.querySelectorAll('[data-open-record]').forEach((card) => {
+    card.addEventListener('click', () => {
+      const [source, id] = card.getAttribute('data-open-record').split('|');
+      if (source === 'assignment') openAssignmentGradeReview(id);
+      else openSheetDetail(id, 'record');
+    });
   });
 }
 
-async function renderGradesRoster() {
+/* -------------------- مراجعة/تعديل نتيجة تكليف أو اختبار (من نظام التكاليف الأصلي) -------------------- */
+
+async function openAssignmentGradeReview(assignmentId) {
   const area = document.getElementById('gradesContentArea');
   area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
   let payload;
   try {
-    payload = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignmentRoster', assignmentId: assignmentGradesActiveId } });
+    payload = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignmentRoster', assignmentId } });
   } catch (e) {
-    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p><button type="button" id="backToGradesListBtn" class="btn-outline-sm">→ رجوع</button>`;
-    document.getElementById('backToGradesListBtn').addEventListener('click', () => { assignmentGradesActiveId = null; renderGradesAssignmentsFilters(); });
+    area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p><button type="button" id="backToRecordBtn" class="btn-outline-sm">→ رجوع</button>`;
+    document.getElementById('backToRecordBtn').addEventListener('click', renderUnifiedRecordTab);
     return;
   }
+
+  let questions = [];
+  try { questions = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignmentQuestions', assignmentId } }); } catch (e) { /* تجاهل */ }
 
   const { assignment, roster } = payload;
   const isAdmin = APP.user.role === 'role_admin';
 
   area.innerHTML = `
-    <button type="button" id="backToGradesListBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;margin-bottom:14px">→ رجوع لقائمة التكاليف</button>
+    <button type="button" id="backToRecordBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;margin-bottom:14px">→ رجوع لقائمة الرصد</button>
     <h3 style="margin:0 0 4px">${escapeHtml(assignment.title)}</h3>
+    <p style="color:#888;font-size:12px;margin:0 0 10px">${escapeHtml(assignment.grade)}/${escapeHtml(assignment.section)} — الدرجة الكلية: ${assignment.max_score}</p>
+    ${questions.length ? `
+      <details style="margin-bottom:16px">
+        <summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--primary)">عرض الأسئلة (${questions.length}) — للمراجعة حتى مع التصحيح التلقائي</summary>
+        <div style="margin-top:8px">
+          ${questions.map((q, i) => `<div style="font-size:12px;padding:6px 0;border-bottom:1px solid var(--outline)">${i + 1}. ${escapeHtml(q.question_text)} <span style="color:#888">(${ANSWER_TYPE_LABELS[q.answer_type]} — ${q.points} درجة)</span></div>`).join('')}
+        </div>
+      </details>` : ''}
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-      <span style="color:#888;font-size:12px">${escapeHtml(assignment.grade)}/${escapeHtml(assignment.section)} — الدرجة الكلية:</span>
+      <span style="color:#888;font-size:12px">الدرجة الكلية:</span>
       <input type="number" min="0.5" step="0.5" id="quickMaxScoreInput" value="${assignment.max_score}" style="width:80px">
-      <button type="button" class="btn-outline-sm" id="quickMaxScoreSaveBtn">تحديث الدرجة الكلية</button>
+      <button type="button" class="btn-outline-sm" id="quickMaxScoreSaveBtn">تحديث</button>
     </div>
+    <div id="assignmentRosterArea"></div>`;
+
+  document.getElementById('backToRecordBtn').addEventListener('click', renderUnifiedRecordTab);
+  document.getElementById('quickMaxScoreSaveBtn').addEventListener('click', async () => {
+    const maxScore = Number(document.getElementById('quickMaxScoreInput').value);
+    if (!maxScore || maxScore <= 0) { showToast('أدخل درجة كلية صحيحة', 'error'); return; }
+    try {
+      await apiCall('academic-config', { method: 'POST', body: { action: 'updateAssignmentMaxScore', id: assignmentId, maxScore } });
+      showToast('تم تحديث الدرجة الكلية', 'success');
+      openAssignmentGradeReview(assignmentId);
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  renderAssignmentRosterRows(assignmentId, assignment, roster);
+}
+
+function renderAssignmentRosterRows(assignmentId, assignment, roster) {
+  const isAdmin = APP.user.role === 'role_admin';
+  const rosterArea = document.getElementById('assignmentRosterArea');
+  rosterArea.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:6px">
       ${roster.map((r) => {
         const gr = r.grade_row;
@@ -5749,72 +5766,225 @@ async function renderGradesRoster() {
         const withinEditWindow = gr ? (Date.now() - new Date(baseTime).getTime()) <= 24 * 60 * 60 * 1000 : true;
         const canEditThis = isAdmin || !gr || withinEditWindow;
         const canDeleteThis = gr && (isAdmin || (Date.now() - new Date(gr.recorded_at).getTime()) <= 30 * 60 * 1000);
-        const canRequestReopen = !isAdmin && gr && !withinEditWindow; // 🆕 المعلم فقط، بعد انتهاء المهلة تحديداً
+        const canRequestReopen = !isAdmin && gr && !withinEditWindow;
         return `
         <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
-          <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(r.student_name)}</span>
+          <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(r.student_name)}${!canEditThis ? ` <span style="color:#C4483A">${ICONS.lock()}</span>` : ''}</span>
           <input type="number" min="0" max="${assignment.max_score}" step="0.5" value="${gr && gr.score !== null ? gr.score : ''}" placeholder="الدرجة" style="width:90px" data-grade-score="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
           <input type="text" value="${gr ? escapeHtml(gr.participation_note || '') : ''}" placeholder="ملاحظة" style="flex:1;min-width:120px" data-grade-note="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
           <button type="button" class="btn-outline-sm" data-save-grade="${r.student_id}" ${canEditThis ? '' : 'disabled'}>حفظ</button>
-          ${gr ? `<button type="button" class="btn-icon-delete" data-delete-grade="${r.student_id}" ${canDeleteThis ? '' : 'disabled'} title="حذف الرصد">${ICONS.trash()}</button>` : ''}
-          ${canRequestReopen ? `<button type="button" class="btn-outline-sm" data-request-reopen="${r.student_id}" style="color:#C4483A;border-color:#C4483A">🔒 انتهت المهلة — طلب فتح من الأدمن</button>` : ''}
+          ${gr ? `<button type="button" class="btn-icon-delete" data-delete-grade="${r.student_id}" ${canDeleteThis ? '' : 'disabled'} title="حذف">${ICONS.trash()}</button>` : ''}
+          ${canRequestReopen ? `<button type="button" class="btn-outline-sm" data-request-reopen="${r.student_id}" style="color:#C4483A;border-color:#C4483A">طلب فتح من الأدمن</button>` : ''}
         </div>`;
       }).join('')}
     </div>`;
 
-  document.getElementById('backToGradesListBtn').addEventListener('click', () => { assignmentGradesActiveId = null; renderGradesAssignmentsFilters(); });
-
-  document.getElementById('quickMaxScoreSaveBtn').addEventListener('click', async () => {
-    const maxScore = Number(document.getElementById('quickMaxScoreInput').value);
-    if (!maxScore || maxScore <= 0) { showToast('أدخل درجة كلية صحيحة', 'error'); return; }
-    try {
-      await apiCall('academic-config', { method: 'POST', body: { action: 'updateAssignmentMaxScore', id: assignmentGradesActiveId, maxScore } });
-      showToast('تم تحديث الدرجة الكلية', 'success');
-      renderGradesRoster();
-    } catch (e) { showToast(e.message, 'error'); }
-  });
-
-  // 🆕 طلب إعادة فتح تعديل — يفتح نافذة صغيرة لكتابة السبب، مرتبطة تلقائياً بالتكليف والطالب
-  area.querySelectorAll('[data-request-reopen]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const studentId = btn.getAttribute('data-request-reopen');
-      const reason = prompt('وضّح سبب طلب إعادة فتح التعديل (سيصل للأدمن مرتبطاً بكل تفاصيل هذا التكليف):');
-      if (reason === null) return;
-      if (!reason.trim()) { showToast('السبب مطلوب', 'error'); return; }
-      btn.disabled = true; btn.textContent = 'جارِ الإرسال...';
-      apiCall('academic-config', { method: 'POST', body: { action: 'requestGradeEditReopen', assignmentId: assignmentGradesActiveId, studentId, reason: reason.trim() } })
-        .then(() => showToast('تم إرسال الطلب للأدمن بنجاح عبر المراسلات', 'success'))
-        .catch((e) => { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = '🔒 انتهت المهلة — طلب فتح من الأدمن'; });
-    });
-  });
-
-  area.querySelectorAll('[data-save-grade]').forEach((btn) => {
+  rosterArea.querySelectorAll('[data-save-grade]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const studentId = btn.getAttribute('data-save-grade');
-      const scoreInput = area.querySelector(`[data-grade-score="${studentId}"]`);
-      const noteInput = area.querySelector(`[data-grade-note="${studentId}"]`);
+      const scoreInput = rosterArea.querySelector(`[data-grade-score="${studentId}"]`);
+      const noteInput = rosterArea.querySelector(`[data-grade-note="${studentId}"]`);
       const score = scoreInput.value === '' ? null : Number(scoreInput.value);
       btn.disabled = true; btn.textContent = 'جارِ...';
       try {
-        await apiCall('academic-config', { method: 'POST', body: { action: 'saveAssignmentGrade', assignmentId: assignmentGradesActiveId, studentId, score, participationNote: noteInput.value.trim() || null } });
+        await apiCall('academic-config', { method: 'POST', body: { action: 'saveAssignmentGrade', assignmentId, studentId, score, participationNote: noteInput.value.trim() || null } });
         showToast('تم حفظ الدرجة', 'success');
-        renderGradesRoster();
+        openAssignmentGradeReview(assignmentId);
       } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'حفظ'; }
     });
   });
-  area.querySelectorAll('[data-delete-grade]').forEach((btn) => {
+  rosterArea.querySelectorAll('[data-delete-grade]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('حذف رصد هذا الطالب نهائياً. هل أنت متأكد؟')) return;
+      if (!confirm('حذف رصد هذا الطالب نهائياً؟')) return;
       try {
-        await apiCall('academic-config', { method: 'POST', body: { action: 'deleteAssignmentGrade', assignmentId: assignmentGradesActiveId, studentId: btn.getAttribute('data-delete-grade') } });
+        await apiCall('academic-config', { method: 'POST', body: { action: 'deleteAssignmentGrade', assignmentId, studentId: btn.getAttribute('data-delete-grade') } });
         showToast('تم الحذف', 'success');
-        renderGradesRoster();
+        openAssignmentGradeReview(assignmentId);
       } catch (e) { showToast(e.message, 'error'); }
+    });
+  });
+  rosterArea.querySelectorAll('[data-request-reopen]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const studentId = btn.getAttribute('data-request-reopen');
+      const reason = prompt('سبب طلب إعادة فتح التعديل:');
+      if (reason === null) return;
+      if (!reason.trim()) { showToast('السبب مطلوب', 'error'); return; }
+      apiCall('academic-config', { method: 'POST', body: { action: 'requestGradeEditReopen', assignmentId, studentId, reason: reason.trim() } })
+        .then(() => showToast('تم إرسال الطلب للأدمن', 'success'))
+        .catch((e) => showToast(e.message, 'error'));
     });
   });
 }
 
+/* -------------------- "رصد جديد" — كشف رصد مباشر (تقييم خارج نظام التكاليف) -------------------- */
+
+async function openNewSheetFlow() {
+  const area = document.getElementById('gradesContentArea');
+  const settings = await getSettingsOnce();
+  const isAdmin = APP.user.role === 'role_admin';
+  const subjectOptions = isAdmin ? (settings.subjects || []) : (APP.user.subject || []);
+  const gradeOptions = isAdmin ? (settings.grades || []) : (APP.user.grades || []);
+  const sectionOptions = isAdmin ? (settings.sections || []) : (APP.user.sections || []);
+  const branch = isAdmin ? (settings.branches || [])[0] : APP.user.branch;
+  const evalTypeOptions = [...(settings.continuousEvalTypes || []), ...(settings.exams || [])];
+
+  area.innerHTML = `
+    <button type="button" id="backToRecordBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;margin-bottom:14px">→ رجوع</button>
+    <h3 style="margin-top:0">رصد جديد (تقييم خارج النظام)</h3>
+    <div class="af-grid-row">
+      <div class="field"><label>المادة</label><select id="ns_subject">${subjectOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+      <div class="field"><label>الصف</label><select id="ns_grade">${gradeOptions.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="ns_section">${sectionOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+      <div class="field"><label>نوع التقييم</label><select id="ns_evalType">${evalTypeOptions.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
+    </div>
+    <div class="field"><label>عنوان التقييم</label><input type="text" id="ns_title" placeholder="مثال: اختبار الوحدة الثالثة"></div>
+    <div class="field"><label>وصف التقييم (اختياري)</label><textarea id="ns_description" rows="2" placeholder="مثال: اختبار ورقي تم إجراؤه داخل المدرسة"></textarea></div>
+    <div class="field"><label>تاريخ الرصد</label><input type="date" id="ns_recordDate" value="${todayISO()}"></div>
+    <div id="ns_maxScoreDisplay" style="margin:10px 0;font-size:12.5px;color:var(--text-muted)"></div>
+    <button type="button" id="ns_showRosterBtn" style="width:100%">عرض الكشف</button>
+    <div id="ns_rosterArea" style="margin-top:16px"></div>`;
+
+  document.getElementById('backToRecordBtn').addEventListener('click', renderUnifiedRecordTab);
+
+  const refreshMaxScore = async () => {
+    const subject = document.getElementById('ns_subject').value;
+    const evalType = document.getElementById('ns_evalType').value;
+    const display = document.getElementById('ns_maxScoreDisplay');
+    if (!subject || !evalType) { display.textContent = ''; return; }
+    try {
+      const dist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
+      const match = dist.find((d) => d.subject === subject && d.eval_type === evalType);
+      display.textContent = match ? `✅ الدرجة الكلية المُعرَّفة: ${match.max_grade}` : '⚠️ لا يوجد توزيع درجات مُعرَّف لهذا الاختيار — أضفه أولاً من الإعدادات ← توزيع الدرجات';
+    } catch (e) { display.textContent = ''; }
+  };
+  document.getElementById('ns_subject').addEventListener('change', refreshMaxScore);
+  document.getElementById('ns_evalType').addEventListener('change', refreshMaxScore);
+  refreshMaxScore();
+
+  document.getElementById('ns_showRosterBtn').addEventListener('click', async () => {
+    const grade = document.getElementById('ns_grade').value;
+    const section = document.getElementById('ns_section').value;
+    const rosterArea = document.getElementById('ns_rosterArea');
+    rosterArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+    let roster;
+    try {
+      roster = await apiCall('academic-config', { method: 'POST', body: { action: 'listStudentsForGradingSheet', branch, grade, section } });
+    } catch (e) { rosterArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+    if (!roster.length) { rosterArea.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
+
+    rosterArea.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${roster.map((s) => `
+          <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
+            <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(s.name_ar)}</span>
+            <input type="number" min="0" step="0.5" placeholder="الدرجة" style="width:90px" data-ns-score="${s.id}">
+            <input type="text" placeholder="ملاحظة" style="flex:1;min-width:120px" data-ns-note="${s.id}">
+          </div>`).join('')}
+      </div>
+      <button type="button" id="ns_saveSheetBtn" style="width:100%;margin-top:14px">حفظ الكشف</button>`;
+
+    document.getElementById('ns_saveSheetBtn').addEventListener('click', async () => {
+      const title = document.getElementById('ns_title').value.trim();
+      if (!title) { showToast('عنوان التقييم مطلوب', 'error'); return; }
+      const entries = roster.map((s) => ({
+        studentId: s.id,
+        score: rosterArea.querySelector(`[data-ns-score="${s.id}"]`).value === '' ? null : Number(rosterArea.querySelector(`[data-ns-score="${s.id}"]`).value),
+        note: rosterArea.querySelector(`[data-ns-note="${s.id}"]`).value.trim() || null,
+      }));
+      const btn = document.getElementById('ns_saveSheetBtn');
+      btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+      try {
+        await apiCall('academic-config', {
+          method: 'POST',
+          body: {
+            action: 'createGradingSheet', branch, grade, section,
+            subject: document.getElementById('ns_subject').value, evalType: document.getElementById('ns_evalType').value,
+            title, description: document.getElementById('ns_description').value.trim() || null,
+            recordDate: document.getElementById('ns_recordDate').value, entries,
+          },
+        });
+        showToast('تم حفظ الكشف بنجاح', 'success');
+        renderUnifiedRecordTab();
+      } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'حفظ الكشف'; }
+    });
+  });
+}
+
+/* -------------------- عرض/تعديل كشف رصد مباشر موجود -------------------- */
+
+async function openSheetDetail(sheetId, returnTo) {
+  const area = document.getElementById('gradesContentArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let payload;
+  try {
+    payload = await apiCall('academic-config', { method: 'POST', body: { action: 'getGradingSheetDetail', sheetId } });
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  const { sheet, entries } = payload;
+  const isAdmin = APP.user.role === 'role_admin';
+  const canEdit = isAdmin || sheet.isOpen;
+
+  area.innerHTML = `
+    <button type="button" id="backBtn" style="background:none;border:none;color:var(--primary);cursor:pointer;font-size:12.5px;padding:0;margin-bottom:14px">→ رجوع</button>
+    <h3 style="margin:0 0 4px">${escapeHtml(sheet.title)} ${!canEdit ? `<span style="color:#C4483A;font-size:13px">${ICONS.lock()}</span>` : ''}</h3>
+    <p style="color:#888;font-size:12px;margin:0 0 4px">${escapeHtml(sheet.subject)} — ${escapeHtml(sheet.grade)}/${escapeHtml(sheet.section)} — ${escapeHtml(sheet.eval_type)} — الدرجة الكلية: ${sheet.max_score}</p>
+    ${sheet.description ? `<p style="color:#888;font-size:12px;margin:0 0 10px">${escapeHtml(sheet.description)}</p>` : ''}
+    ${!canEdit ? `<p style="color:#C4483A;font-size:12px;margin-bottom:10px">انتهت مهلة التعديل (يوم كامل) بتاريخ ${new Date(sheet.windowEnd).toLocaleString('ar-SA-u-ca-gregory')}</p>` : ''}
+    <div id="sheetEntriesArea"></div>
+    ${isAdmin && !sheet.isOpen ? `<button type="button" id="adminReopenSheetBtn" style="width:100%;margin-top:14px;background:#2F7A4D">${ICONS.lock()} فتح الكشف ليوم كامل</button>` : ''}
+    ${!isAdmin && !canEdit ? `<button type="button" id="requestSheetReopenBtn" style="width:100%;margin-top:14px;color:#C4483A;border:1px solid #C4483A;background:none">طلب فتح من الأدمن</button>` : ''}
+  `;
+
+  document.getElementById('backBtn').addEventListener('click', () => { if (returnTo === 'record') renderUnifiedRecordTab(); else renderSheetsManagementTab(); });
+
+  document.getElementById('adminReopenSheetBtn')?.addEventListener('click', async () => {
+    try {
+      await apiCall('academic-config', { method: 'POST', body: { action: 'reopenGradingSheet', sheetId } });
+      showToast('تم فتح الكشف ليوم كامل بنجاح', 'success');
+      openSheetDetail(sheetId, returnTo);
+    } catch (e) { showToast(e.message, 'error'); }
+  });
+
+  document.getElementById('sheetEntriesArea').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${entries.map((e) => `
+        <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
+          <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(e.student_name)}</span>
+          <input type="number" min="0" max="${sheet.max_score}" step="0.5" value="${e.score !== null ? e.score : ''}" style="width:90px" data-sheet-score="${e.student_id}" ${canEdit ? '' : 'disabled'}>
+          <input type="text" value="${escapeHtml(e.note || '')}" placeholder="ملاحظة" style="flex:1;min-width:120px" data-sheet-note="${e.student_id}" ${canEdit ? '' : 'disabled'}>
+        </div>`).join('')}
+    </div>
+    ${canEdit ? `<button type="button" id="saveSheetEntriesBtn" style="width:100%;margin-top:14px">حفظ التعديلات</button>` : ''}`;
+
+  if (canEdit) {
+    document.getElementById('saveSheetEntriesBtn').addEventListener('click', async () => {
+      const updated = entries.map((e) => ({
+        studentId: e.student_id,
+        score: document.querySelector(`[data-sheet-score="${e.student_id}"]`).value === '' ? null : Number(document.querySelector(`[data-sheet-score="${e.student_id}"]`).value),
+        note: document.querySelector(`[data-sheet-note="${e.student_id}"]`).value.trim() || null,
+      }));
+      try {
+        await apiCall('academic-config', { method: 'POST', body: { action: 'updateGradingSheetEntries', sheetId, entries: updated } });
+        showToast('تم حفظ التعديلات', 'success');
+        openSheetDetail(sheetId, returnTo);
+      } catch (e) { showToast(e.message, 'error'); }
+    });
+  }
+
+  document.getElementById('requestSheetReopenBtn')?.addEventListener('click', () => {
+    const reason = prompt('سبب طلب إعادة فتح الكشف:');
+    if (reason === null) return;
+    if (!reason.trim()) { showToast('السبب مطلوب', 'error'); return; }
+    apiCall('academic-config', { method: 'POST', body: { action: 'requestSheetReopen', sheetId, reason: reason.trim() } })
+      .then(() => showToast('تم إرسال الطلب للأدمن', 'success'))
+      .catch((e) => showToast(e.message, 'error'));
+  });
+}
+
 /* -------------------- تبويب 2: المشاركة والتفاعل -------------------- */
+
+const PARTICIPATION_TYPES_ = ['مشاركة', 'إجابة', 'تفاعل', 'نشاط', 'مبادرة', 'أداء متميز'];
 
 async function renderParticipationTab() {
   const area = document.getElementById('gradesContentArea');
@@ -5839,15 +6009,12 @@ async function searchStudentsForParticipation(query) {
   try {
     students = await apiCall('academic-config', { method: 'POST', body: { action: 'searchStudentsForPerformance', query } });
   } catch (e) { resultsArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
-
   if (!students.length) { resultsArea.innerHTML = '<p style="color:#888;font-size:12.5px">لا نتائج</p>'; return; }
-
   resultsArea.innerHTML = students.map((s) => `
     <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px;margin-bottom:4px;cursor:pointer" data-part-student="${s.id}" data-part-student-name="${escapeHtml(s.name_ar)}">
       <span style="font-size:12.5px;font-weight:700">${escapeHtml(s.name_ar)}</span>
       <span style="font-size:11px;color:var(--text-muted)">${escapeHtml(s.grade)}/${escapeHtml(s.section)}</span>
     </div>`).join('');
-
   resultsArea.querySelectorAll('[data-part-student]').forEach((row) => {
     row.addEventListener('click', () => openParticipationDetail(row.getAttribute('data-part-student'), row.getAttribute('data-part-student-name')));
   });
@@ -5866,9 +6033,10 @@ async function openParticipationDetail(studentId, studentName) {
         <div class="field"><label>المادة</label><select id="part_subject">${subjectOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
         <div class="field"><label>نوع التقييم (بتوزيع الدرجات)</label><select id="part_evaltype">${(settings.continuousEvalTypes || []).map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
       </div>
+      <div class="field"><label>نوع المشاركة</label><select id="part_type">${PARTICIPATION_TYPES_.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select></div>
       <div style="display:flex;gap:10px;margin-top:10px">
-        <button type="button" id="part_addPositiveBtn" style="flex:1;background:#2F7A4D">+ مشاركة إيجابية</button>
-        <button type="button" id="part_addNegativeBtn" style="flex:1;background:#C4483A">− مشاركة سلبية</button>
+        <button type="button" id="part_addPositiveBtn" style="flex:1;background:#2F7A4D">+ إيجابي</button>
+        <button type="button" id="part_addNegativeBtn" style="flex:1;background:#C4483A">− سلبي</button>
       </div>
       <div class="field" style="margin-top:10px"><label>ملاحظة (اختياري)</label><input type="text" id="part_note" placeholder="مثال: تفاعل ممتاز بالنقاش"></div>
       <div id="participationScoreArea" style="margin-top:16px"></div>
@@ -5876,21 +6044,20 @@ async function openParticipationDetail(studentId, studentName) {
     </div>`;
 
   const loadForCurrentSubject = () => loadParticipationForStudentSubject(studentId, studentName, document.getElementById('part_subject').value);
-
   document.getElementById('part_subject').addEventListener('change', loadForCurrentSubject);
   document.getElementById('part_addPositiveBtn').addEventListener('click', () => submitParticipationEntry(studentId, 'positive'));
   document.getElementById('part_addNegativeBtn').addEventListener('click', () => submitParticipationEntry(studentId, 'negative'));
-
   loadForCurrentSubject();
 }
 
 async function submitParticipationEntry(studentId, direction) {
   const subject = document.getElementById('part_subject').value;
   const evalType = document.getElementById('part_evaltype').value;
+  const participationType = document.getElementById('part_type').value;
   const note = document.getElementById('part_note').value.trim();
   if (!subject || !evalType) { showToast('حدّد المادة ونوع التقييم', 'error'); return; }
   try {
-    await apiCall('academic-config', { method: 'POST', body: { action: 'addParticipationEntry', studentId, subject, evalType, direction, note: note || null } });
+    await apiCall('academic-config', { method: 'POST', body: { action: 'addParticipationEntry', studentId, subject, evalType, direction, participationType, note: note || null } });
     showToast(direction === 'positive' ? 'تم تسجيل مشاركة إيجابية' : 'تم تسجيل مشاركة سلبية', 'success');
     document.getElementById('part_note').value = '';
     loadParticipationForStudentSubject(studentId, null, subject);
@@ -5926,7 +6093,7 @@ async function loadParticipationForStudentSubject(studentId, studentName, subjec
     <div class="filter-card-title">السجل</div>
     ${log.length ? log.map((entry) => `
       <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px;margin-top:6px">
-        <span style="font-size:12px">${entry.direction === 'positive' ? '🟢 إيجابي' : '🔴 سلبي'} — ${escapeHtml(entry.eval_type)}${entry.note ? ' — ' + escapeHtml(entry.note) : ''}</span>
+        <span style="font-size:12px">${entry.direction === 'positive' ? '🟢' : '🔴'} ${escapeHtml(entry.participation_type || entry.eval_type)}${entry.note ? ' — ' + escapeHtml(entry.note) : ''}</span>
         <div style="display:flex;align-items:center;gap:8px">
           <span style="font-size:11px;color:var(--text-muted)">${new Date(entry.recorded_at).toLocaleString('ar-SA-u-ca-gregory')}</span>
           <button type="button" class="btn-icon-delete" data-delete-part="${entry.id}" title="حذف">${ICONS.trash()}</button>
@@ -5935,13 +6102,42 @@ async function loadParticipationForStudentSubject(studentId, studentName, subjec
 
   historyArea.querySelectorAll('[data-delete-part]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('حذف هذا القيد نهائياً. هل أنت متأكد؟')) return;
+      if (!confirm('حذف هذا القيد نهائياً؟')) return;
       try {
         await apiCall('academic-config', { method: 'POST', body: { action: 'deleteParticipationEntry', id: btn.getAttribute('data-delete-part') } });
         showToast('تم الحذف', 'success');
         loadParticipationForStudentSubject(studentId, studentName, subject);
       } catch (e) { showToast(e.message, 'error'); }
     });
+  });
+}
+
+/* -------------------- تبويب 3: تعديل الكشوفات -------------------- */
+
+async function renderSheetsManagementTab() {
+  const area = document.getElementById('gradesContentArea');
+  area.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+  let sheets;
+  try {
+    sheets = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradingSheets' } });
+  } catch (e) { area.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  if (!sheets.length) { area.innerHTML = '<p style="color:#888">لا توجد كشوفات رصد مباشر بعد</p>'; return; }
+
+  area.innerHTML = sheets.map((s) => `
+    <div class="card" style="margin-bottom:10px;cursor:pointer" data-open-sheet="${s.id}">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          ${s.isOpen ? '<span style="color:#2F7A4D;font-size:11px;font-weight:700">● مفتوح</span>' : `<span style="color:#C4483A;display:inline-flex;align-items:center;gap:3px;font-size:11px;font-weight:700">${ICONS.lock()} مغلق</span>`}
+          ${s.reopened_at ? '<span style="color:#B8860B;font-size:11px">🔓 أُعيد فتحه</span>' : ''}
+          <span style="font-weight:700;font-size:13px">${escapeHtml(s.title)}</span>
+        </div>
+        <span style="font-size:11.5px;color:var(--text-muted)">${escapeHtml(s.subject)} — ${escapeHtml(s.grade)}/${escapeHtml(s.section)} — ${s.studentsGraded}/${s.studentsTotal} مرصود${s.teacher_name ? ' — ' + escapeHtml(s.teacher_name) : ''}</span>
+      </div>
+    </div>`).join('');
+
+  area.querySelectorAll('[data-open-sheet]').forEach((card) => {
+    card.addEventListener('click', () => openSheetDetail(card.getAttribute('data-open-sheet'), 'sheets'));
   });
 }
 
