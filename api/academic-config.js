@@ -26,6 +26,7 @@ import {
   addHolidaySchema, updateHolidaySchema,
   classScheduleEntrySchema, examScheduleEntrySchema,
   saveAssignmentSchema, saveAssignmentGradeSchema,
+  createGradingSheetSchema, updateGradingSheetEntriesSchema, requestSheetReopenSchema,
 } from '../lib/validation.js';
 
 /* -------------------- 🆕 صلاحيات التكاليف/المهام/الاختبارات/الإثراء -------------------- */
@@ -1160,6 +1161,323 @@ async function handleReopenGradeEdit(req, res) {
   return res.status(200).json({ success: true, data: { windowEnd } });
 }
 
+/* ===================== 🆕 إعادة بناء صفحة الرصد — كشوفات الرصد المباشر ===================== */
+// "كشف رصد" ككيان مستقل حقيقي للتقييمات خارج نظام التكاليف/الاختبارات
+// (اختبار ورقي، تقييم شفهي، نشاط...) — لا يمس هذا أي شيء بصفحة
+// التكاليف والمهام والاختبارات (assignments/assignment_grades) إطلاقاً.
+
+const SHEET_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 🆕 يوم كامل — نفس منطق تعديل الدرجات بالضبط
+
+/** يتحقّق أن المعلم مصرَّح له فعلياً بهذا (الفرع/الصف/الشعبة/المادة) —
+ * الأدمن بلا قيد. مطابق تماماً لنفس منطق التحقق المستخدَم بالتكاليف. */
+function assertTeacherClassScope_(user, d) {
+  if (user.role === 'role_admin') return;
+  const inScope = user.branch === d.branch
+    && (user.grades || []).includes(d.grade)
+    && (user.sections || []).includes(d.section)
+    && (user.subject || []).includes(d.subject);
+  if (!inScope) {
+    const e = new Error('لا تملك صلاحية الوصول لهذا الفرع/الصف/الشعبة/المادة');
+    e.statusCode = 403;
+    throw e;
+  }
+}
+
+/** 🆕 يجيب الدرجة القصوى المُعرَّفة بتوزيع الدرجات لهذا (المادة + نوع
+ * التقييم) — تُحفَظ كـSnapshot ثابت بالكشف وقت إنشائه (لا تتأثر بأي
+ * تعديل لاحق على توزيع الدرجات، حفاظاً على النتائج التاريخية). */
+async function getMaxScoreForEvalType_(subject, evalType) {
+  const { data, error } = await supabaseAdmin.from('grade_distribution').select('max_grade').eq('subject', subject).eq('eval_type', evalType).maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    const e = new Error(`لا يوجد توزيع درجات مُعرَّف لمادة "${subject}" بنوع تقييم "${evalType}" — أضفه أولاً من الإعدادات ← توزيع الدرجات`);
+    e.statusCode = 400;
+    throw e;
+  }
+  return Number(data.max_grade);
+}
+
+/** 🆕 حساب الأساس الزمني الفعلي لكشف (آخر إعادة فتح إن وُجدت، وإلا وقت الإنشاء) + هل لسه ضمن مهلة اليوم */
+function computeSheetEditability_(sheet) {
+  const baseTime = (sheet.reopened_at && new Date(sheet.reopened_at) > new Date(sheet.created_at)) ? sheet.reopened_at : sheet.created_at;
+  const windowEnd = new Date(new Date(baseTime).getTime() + SHEET_EDIT_WINDOW_MS);
+  return { baseTime, windowEnd: windowEnd.toISOString(), isOpen: Date.now() <= windowEnd.getTime() };
+}
+
+/* -------------------- إنشاء كشف رصد جديد -------------------- */
+async function handleCreateGradingSheet(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const d = validateBody(createGradingSheetSchema, req.body);
+  assertTeacherClassScope_(user, d);
+
+  const maxScore = await getMaxScoreForEvalType_(d.subject, d.evalType); // 🆕 Snapshot ثابت
+  const { termId, weekId } = await resolveTermAndWeek_(d.recordDate);
+
+  const { data: sheet, error: sheetError } = await supabaseAdmin.from('grading_sheets').insert({
+    teacher_id: user.id, teacher_name: user.fullName, branch: d.branch, stage: d.stage || null,
+    grade: d.grade, section: d.section, subject: d.subject, eval_type: d.evalType,
+    title: d.title, description: d.description || null, max_score: maxScore,
+    term_id: termId, week_id: weekId, record_date: d.recordDate, status: 'open',
+  }).select('id').single();
+  if (sheetError) throw sheetError;
+
+  if (d.entries.length) {
+    // 🆕 نجيب أسماء الطلاب لتخزينها مباشرة بالكشف (Snapshot — لا يتأثر لو تغيّر اسم الطالب لاحقاً)
+    const studentIds = d.entries.map((e) => e.studentId);
+    const { data: students } = await supabaseAdmin.from('students').select('id, name_ar').in('id', studentIds);
+    const nameById = Object.fromEntries((students || []).map((s) => [s.id, s.name_ar]));
+
+    for (const e of d.entries) {
+      if (e.score !== null && e.score !== undefined && e.score > maxScore) {
+        const err = new Error(`درجة الطالب لا يجب أن تتجاوز الدرجة الكلية (${maxScore})`);
+        err.statusCode = 400;
+        throw err;
+      }
+    }
+    const rows = d.entries.map((e) => ({ sheet_id: sheet.id, student_id: e.studentId, student_name: nameById[e.studentId] || null, score: e.score ?? null, note: e.note || null }));
+    const { error: entriesError } = await supabaseAdmin.from('grading_sheet_entries').insert(rows);
+    if (entriesError) throw entriesError;
+  }
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'إنشاء كشف رصد مباشر', details: { sheetId: sheet.id, subject: d.subject, evalType: d.evalType, title: d.title, studentsCount: d.entries.length }, branch: user.branch,
+  });
+
+  // 🆕 نُحدِّث تجميع الدرجات لكل طالب فوراً بعد الإنشاء
+  for (const e of d.entries) { if (e.score !== null && e.score !== undefined) await recomputeGradeAggregation_(e.studentId, d.subject); }
+
+  return res.status(200).json({ success: true, data: { id: sheet.id } });
+}
+
+/* -------------------- قائمة كشوفاتي (أو الكل للأدمن) -------------------- */
+async function handleListGradingSheets(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+
+  let query = supabaseAdmin.from('grading_sheets').select('*').order('created_at', { ascending: false });
+  if (user.role !== 'role_admin') query = query.eq('teacher_id', user.id);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const sheetIds = data.map((s) => s.id);
+  let entryCounts = {};
+  if (sheetIds.length) {
+    const { data: entries } = await supabaseAdmin.from('grading_sheet_entries').select('sheet_id, score').in('sheet_id', sheetIds);
+    (entries || []).forEach((e) => {
+      if (!entryCounts[e.sheet_id]) entryCounts[e.sheet_id] = { total: 0, graded: 0 };
+      entryCounts[e.sheet_id].total += 1;
+      if (e.score !== null) entryCounts[e.sheet_id].graded += 1;
+    });
+  }
+
+  const enriched = data.map((s) => {
+    const editability = computeSheetEditability_(s);
+    const counts = entryCounts[s.id] || { total: 0, graded: 0 };
+    return { ...s, ...editability, studentsTotal: counts.total, studentsGraded: counts.graded };
+  });
+  return res.status(200).json({ success: true, data: enriched });
+}
+
+/* -------------------- تفاصيل كشف واحد -------------------- */
+async function handleGetGradingSheetDetail(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const { sheetId } = validateBody(z.object({ sheetId: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: sheet, error } = await supabaseAdmin.from('grading_sheets').select('*').eq('id', sheetId).single();
+  if (error || !sheet) { const e = new Error('الكشف غير موجود'); e.statusCode = 404; throw e; }
+  if (user.role !== 'role_admin' && sheet.teacher_id !== user.id) { const e = new Error('لا تملك صلاحية الوصول لهذا الكشف'); e.statusCode = 403; throw e; }
+
+  const { data: entries, error: entriesError } = await supabaseAdmin.from('grading_sheet_entries').select('*').eq('sheet_id', sheetId).order('student_name');
+  if (entriesError) throw entriesError;
+
+  return res.status(200).json({ success: true, data: { sheet: { ...sheet, ...computeSheetEditability_(sheet) }, entries } });
+}
+
+/* -------------------- تعديل درجات كشف (ضمن مهلة اليوم فقط) -------------------- */
+async function handleUpdateGradingSheetEntries(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const d = validateBody(updateGradingSheetEntriesSchema, req.body);
+
+  const { data: sheet, error } = await supabaseAdmin.from('grading_sheets').select('*').eq('id', d.sheetId).single();
+  if (error || !sheet) { const e = new Error('الكشف غير موجود'); e.statusCode = 404; throw e; }
+  if (user.role !== 'role_admin' && sheet.teacher_id !== user.id) { const e = new Error('لا تملك صلاحية تعديل هذا الكشف'); e.statusCode = 403; throw e; }
+
+  const editability = computeSheetEditability_(sheet);
+  if (user.role !== 'role_admin' && !editability.isOpen) {
+    const e = new Error('انتهت مهلة تعديل هذا الكشف (يوم كامل) — أرسل طلب إعادة فتح للأدمن');
+    e.statusCode = 403;
+    throw e;
+  }
+
+  for (const e of d.entries) {
+    if (e.score !== null && e.score !== undefined && e.score > sheet.max_score) {
+      const err = new Error(`الدرجة لا يجب أن تتجاوز الدرجة الكلية للكشف (${sheet.max_score})`);
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+
+  for (const e of d.entries) {
+    const { error: upsertError } = await supabaseAdmin.from('grading_sheet_entries')
+      .upsert({ sheet_id: d.sheetId, student_id: e.studentId, score: e.score ?? null, note: e.note || null }, { onConflict: 'sheet_id,student_id' });
+    if (upsertError) throw upsertError;
+  }
+  await supabaseAdmin.from('grading_sheets').update({ updated_at: new Date().toISOString() }).eq('id', d.sheetId);
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'تعديل درجات كشف رصد', details: { sheetId: d.sheetId, entriesCount: d.entries.length }, branch: user.branch,
+  });
+
+  for (const e of d.entries) { if (e.score !== null && e.score !== undefined) await recomputeGradeAggregation_(e.studentId, sheet.subject); }
+
+  return res.status(200).json({ success: true, data: true });
+}
+
+/* -------------------- طلب إعادة فتح كشف مغلق -------------------- */
+async function handleRequestSheetReopen(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_teacher']);
+  const d = validateBody(requestSheetReopenSchema, req.body);
+
+  const { data: sheet, error } = await supabaseAdmin.from('grading_sheets').select('*').eq('id', d.sheetId).single();
+  if (error || !sheet) { const e = new Error('الكشف غير موجود'); e.statusCode = 404; throw e; }
+  if (sheet.teacher_id !== user.id) { const e = new Error('لا تملك صلاحية طلب فتح كشف معلم آخر'); e.statusCode = 403; throw e; }
+
+  const editability = computeSheetEditability_(sheet);
+  const { data: entries } = await supabaseAdmin.from('grading_sheet_entries').select('student_name, score').eq('sheet_id', d.sheetId);
+
+  const { data: admins } = await supabaseAdmin.from('employees').select('id').eq('role', 'role_admin').is('deleted_at', null);
+  if (!admins || !admins.length) { const e = new Error('لا يوجد حساب أدمن لاستقبال الطلب حالياً'); e.statusCode = 500; throw e; }
+
+  const subject = `طلب إعادة فتح كشف رصد — ${sheet.title}`;
+  const body = [
+    `المعلم: ${user.fullName}`,
+    `المادة: ${sheet.subject}`,
+    `الصف/الشعبة: ${sheet.grade} / ${sheet.section}`,
+    `نوع التقييم: ${sheet.eval_type}`,
+    `عنوان الكشف: ${sheet.title}`,
+    `تاريخ الإنشاء: ${new Date(sheet.created_at).toLocaleString('ar-SA-u-ca-gregory')}`,
+    `وقت الإغلاق: ${new Date(editability.windowEnd).toLocaleString('ar-SA-u-ca-gregory')}`,
+    `الدرجات الحالية: ${(entries || []).map((e) => `${e.student_name}: ${e.score ?? '—'}`).join('، ')}`,
+    `سبب طلب إعادة الفتح: ${d.reason}`,
+  ].join('\n');
+
+  const { data: thread, error: threadError } = await supabaseAdmin.from('chat_threads').insert({
+    subject, context_type: 'sheet_reopen_request', context_id: String(sheet.id),
+    sender_id: user.id, sender_type: 'employee', branch: user.branch,
+  }).select('id').single();
+  if (threadError) throw threadError;
+
+  await supabaseAdmin.from('chat_messages').insert({ thread_id: thread.id, sender_id: user.id, sender_type: 'employee', body, is_original: true });
+  await supabaseAdmin.from('chat_recipients').insert(admins.map((a) => ({ thread_id: thread.id, recipient_id: a.id, recipient_type: 'employee' })));
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'طلب إعادة فتح كشف رصد', details: { sheetId: sheet.id, reason: d.reason, threadId: thread.id }, branch: user.branch,
+  });
+
+  return res.status(200).json({ success: true, data: { threadId: thread.id } });
+}
+
+/* -------------------- الأدمن يعيد فتح كشف -------------------- */
+async function handleReopenGradingSheet(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin']);
+  const { sheetId } = validateBody(z.object({ sheetId: z.union([z.string(), z.number()]) }), req.body);
+
+  const { data: sheet, error } = await supabaseAdmin.from('grading_sheets').select('id').eq('id', sheetId).single();
+  if (error || !sheet) { const e = new Error('الكشف غير موجود'); e.statusCode = 404; throw e; }
+
+  const now = new Date().toISOString();
+  const { error: updateError } = await supabaseAdmin.from('grading_sheets').update({ reopened_at: now, reopened_by: user.id, status: 'open' }).eq('id', sheetId);
+  if (updateError) throw updateError;
+
+  const windowEnd = new Date(Date.now() + SHEET_EDIT_WINDOW_MS).toISOString();
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'إعادة فتح كشف رصد', details: { sheetId, reopenedAt: now, windowEnd }, branch: user.branch,
+  });
+
+  return res.status(200).json({ success: true, data: { windowEnd } });
+}
+
+/* -------------------- قائمة طلاب لإنشاء كشف جديد (ضمن نطاق المعلم) -------------------- */
+async function handleListStudentsForGradingSheet(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const { branch, grade, section } = validateBody(z.object({
+    branch: z.string().min(1), grade: z.string().min(1), section: z.string().min(1),
+  }), req.body);
+  assertTeacherClassScope_(user, { branch, grade, section, subject: (user.subject || [])[0] || '' }); // 🆕 فحص تقريبي — الفحص الدقيق بالمادة يحصل وقت الإنشاء الفعلي
+
+  const { data, error } = await supabaseAdmin.from('students').select('id, name_ar')
+    .eq('branch', branch).eq('grade', grade).eq('section', section).is('deleted_at', null).order('name_ar');
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+/* -------------------- 🆕 الرصد الموحَّد: تكاليف/اختبارات + كشوفات مباشرة معاً -------------------- */
+async function handleListUnifiedGradingRecords(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+
+  let assignmentsQuery = supabaseAdmin.from('assignments').select('*').gt('max_score', 0);
+  if (user.role !== 'role_admin') assignmentsQuery = assignmentsQuery.eq('teacher_id', user.id);
+  const { data: assignments, error: aError } = await assignmentsQuery;
+  if (aError) throw aError;
+
+  let sheetsQuery = supabaseAdmin.from('grading_sheets').select('*');
+  if (user.role !== 'role_admin') sheetsQuery = sheetsQuery.eq('teacher_id', user.id);
+  const { data: sheets, error: sError } = await sheetsQuery;
+  if (sError) throw sError;
+
+  const assignmentIds = assignments.map((a) => a.id);
+  const sheetIds = sheets.map((s) => s.id);
+  const [{ data: aGrades }, { data: sEntries }, { data: aQuestions }] = await Promise.all([
+    assignmentIds.length ? supabaseAdmin.from('assignment_grades').select('assignment_id, score').in('assignment_id', assignmentIds) : { data: [] },
+    sheetIds.length ? supabaseAdmin.from('grading_sheet_entries').select('sheet_id, score').in('sheet_id', sheetIds) : { data: [] },
+    assignmentIds.length ? supabaseAdmin.from('assignment_questions').select('assignment_id, answer_type').in('assignment_id', assignmentIds) : { data: [] },
+  ]);
+
+  const countBySource = (rows, key) => {
+    const map = {};
+    (rows || []).forEach((r) => { if (!map[r[key]]) map[r[key]] = { total: 0, graded: 0 }; map[r[key]].total++; if (r.score !== null) map[r[key]].graded++; });
+    return map;
+  };
+  const aCounts = countBySource(aGrades, 'assignment_id');
+  const sCounts = countBySource(sEntries, 'sheet_id');
+  const qByAssignment = {};
+  (aQuestions || []).forEach((q) => { (qByAssignment[q.assignment_id] = qByAssignment[q.assignment_id] || []).push(q.answer_type); });
+
+  const fromAssignments = assignments.map((a) => {
+    const types = qByAssignment[a.id] || [];
+    const counts = aCounts[a.id] || { total: 0, graded: 0 };
+    return {
+      source: 'assignment', id: a.id, title: a.title, subject: a.subject, grade: a.grade, section: a.section,
+      evalType: a.eval_type, maxScore: a.max_score, isAutoGradable: types.length > 0 && types.every((t) => t === 'mcq' || t === 'true_false'),
+      studentsTotal: counts.total, studentsGraded: counts.graded, createdAt: a.published_at,
+    };
+  });
+  const fromSheets = sheets.map((s) => {
+    const counts = sCounts[s.id] || { total: 0, graded: 0 };
+    return {
+      source: 'sheet', id: s.id, title: s.title, subject: s.subject, grade: s.grade, section: s.section,
+      evalType: s.eval_type, maxScore: s.max_score, isAutoGradable: false,
+      studentsTotal: counts.total, studentsGraded: counts.graded, createdAt: s.created_at,
+      ...computeSheetEditability_(s),
+    };
+  });
+
+  const combined = [...fromAssignments, ...fromSheets].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return res.status(200).json({ success: true, data: combined });
+}
+
 /* -------------------- 🆕 المشاركة والتفاعل (سجل تراكمي مستقل عن التكاليف) -------------------- */
 // كل قيد "إشارة" فقط (إيجابي/سلبي) — لا قيمة رقمية حرة. الدرجة المستحقة
 // تُحسَب بمعادلة نسبية (إيجابي ÷ إجمالي) مُرجَّحة بوزن "المشاركة والتفاعل"
@@ -1170,7 +1488,7 @@ async function handleAddParticipationEntry(req, res) {
   requireRole(user, ['role_admin', 'role_teacher']);
   const d = validateBody(z.object({
     studentId: z.string().min(1), subject: z.string().trim().min(1), evalType: z.string().trim().min(1),
-    direction: z.enum(['positive', 'negative']), note: z.string().trim().max(300).optional().nullable(),
+    direction: z.enum(['positive', 'negative']), participationType: z.string().trim().max(50).optional().nullable(), note: z.string().trim().max(300).optional().nullable(),
   }), req.body);
 
   const { data: student, error: sError } = await supabaseAdmin.from('students').select('*').eq('id', d.studentId).single();
@@ -1191,7 +1509,7 @@ async function handleAddParticipationEntry(req, res) {
   const { error } = await supabaseAdmin.from('participation_log').insert({
     student_id: student.id, student_name: student.name_ar, subject: d.subject, eval_type: d.evalType,
     branch: student.branch, stage: student.stage, grade: student.grade, section: student.section,
-    direction: d.direction, note: d.note || null, recorded_by: user.id, recorded_by_name: user.fullName,
+    direction: d.direction, participation_type: d.participationType || null, note: d.note || null, recorded_by: user.id, recorded_by_name: user.fullName,
   });
   if (error) throw error;
 
@@ -1470,6 +1788,14 @@ export default createRouter({
   deleteAssignmentGrade: handleDeleteAssignmentGrade,
   requestGradeEditReopen: handleRequestGradeEditReopen,
   reopenGradeEdit: handleReopenGradeEdit,
+  createGradingSheet: handleCreateGradingSheet,
+  listGradingSheets: handleListGradingSheets,
+  getGradingSheetDetail: handleGetGradingSheetDetail,
+  updateGradingSheetEntries: handleUpdateGradingSheetEntries,
+  requestSheetReopen: handleRequestSheetReopen,
+  reopenGradingSheet: handleReopenGradingSheet,
+  listStudentsForGradingSheet: handleListStudentsForGradingSheet,
+  listUnifiedGradingRecords: handleListUnifiedGradingRecords,
   addParticipationEntry: handleAddParticipationEntry,
   listParticipationLog: handleListParticipationLog,
   deleteParticipationEntry: handleDeleteParticipationEntry,
