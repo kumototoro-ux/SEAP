@@ -133,20 +133,23 @@ body {
 .field label { display: block; font-size: 13px; color: var(--text-muted); font-weight: 600; margin-bottom: 6px; }
 /* 🆕 تنسيق احترافي موحَّد لكل حقول الإدخال — أُضيفت textarea (كانت بلا أي
    تنسيق موحَّد إطلاقاً)، مع حالات focus/hover/disabled/placeholder واضحة
-   ومتّسقة مع هوية الموقع (حلقة تركيز خفيفة بلون العلامة، انتقال سلس) */
-.field input, .field select, .field textarea {
+   ومتّسقة مع هوية الموقع (حلقة تركيز خفيفة بلون العلامة، انتقال سلس)
+   ⚠️ مصحَّح: استُثنيت checkbox/radio صراحة — كانت هذي القاعدة تطبِّق
+   حشواً وحدوداً على خانات الاختيار نفسها بالغلط (تحويل مربع اختيار
+   صغير طبيعي لمربع كبير منفصل غريب المظهر بجانب النص) */
+.field input:not([type="checkbox"]):not([type="radio"]), .field select, .field textarea {
   width: 100%; padding: 11px 14px; border: 1.5px solid var(--outline); border-radius: var(--radius-sm);
   font-size: 14px; font-family: inherit; background: var(--surface); color: var(--text, #202124);
   transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; box-sizing: border-box;
 }
 .field textarea { resize: vertical; min-height: 80px; line-height: 1.6; }
 .field input::placeholder, .field textarea::placeholder { color: #a3a3a0; }
-.field input:hover, .field select:hover, .field textarea:hover { border-color: #c9c9c4; }
-.field input:focus, .field select:focus, .field textarea:focus {
+.field input:not([type="checkbox"]):not([type="radio"]):hover, .field select:hover, .field textarea:hover { border-color: #c9c9c4; }
+.field input:not([type="checkbox"]):not([type="radio"]):focus, .field select:focus, .field textarea:focus {
   outline: none; border-color: var(--primary); background: var(--surface-card);
   box-shadow: 0 0 0 3px rgba(47, 122, 77, 0.12); /* 🆕 حلقة تركيز خفيفة تعكس هوية الموقع */
 }
-.field input:disabled, .field select:disabled, .field textarea:disabled { background: #f2f2ef; color: #999; cursor: not-allowed; border-color: var(--outline); }
+.field input:not([type="checkbox"]):not([type="radio"]):disabled, .field select:disabled, .field textarea:disabled { background: #f2f2ef; color: #999; cursor: not-allowed; border-color: var(--outline); }
 .field input[type="number"] { font-variant-numeric: tabular-nums; }
 .field select { cursor: pointer; }
 /* 🆕 سهم منسدل موحَّد بكل المتصفحات — الشكل الافتراضي يختلف بشكل غير متّسق */
