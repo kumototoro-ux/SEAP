@@ -568,8 +568,20 @@ button:disabled { opacity: .5; cursor: wait; }
 }
 .header-icon-btn:hover { background: var(--surface); }
 .notif-badge {
-  position: absolute; top: 8px; left: 8px; width: 9px; height: 9px; border-radius: 50%;
-  background: #6FCF57; border: 2px solid var(--surface-card);
+  position: absolute; top: 4px; left: 4px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px;
+  background: #C4483A; border: 2px solid var(--surface-card); color: #fff; font-size: 9.5px; font-weight: 800;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+}
+
+/* 🆕 حركة رنين لطيفة للجرس عند وجود إشعارات غير مقروءة فعلياً */
+.notif-ring svg { animation: notif-bell-ring 4s ease-in-out infinite; transform-origin: top center; }
+@keyframes notif-bell-ring {
+  0%, 88%, 100% { transform: rotate(0); }
+  90% { transform: rotate(-12deg); }
+  92% { transform: rotate(10deg); }
+  94% { transform: rotate(-8deg); }
+  96% { transform: rotate(5deg); }
+  98% { transform: rotate(0); }
 }
 
 .header-user { position: relative; display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 6px; border-radius: 999px; }
@@ -929,3 +941,19 @@ input[type="date"], input[type="time"], input[type="datetime-local"] {
 }
 .analytics-filter-remove svg { width: 11px; height: 11px; }
 .analytics-filter-remove:hover { background: #FADAD6; color: #C4483A; }
+
+/* ---------- 🆕 الشاشة الافتتاحية الاحترافية (Splash Screen) — 5 ثوانٍ ---------- */
+.splash-screen {
+  position: fixed; inset: 0; background: linear-gradient(135deg, #F7F6F0 0%, #EFEEE6 100%);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px;
+  z-index: 1000; opacity: 1; transition: opacity .35s ease;
+}
+.splash-screen.fade-out { opacity: 0; }
+.splash-logo-wrap { display: flex; flex-direction: column; align-items: center; gap: 14px; animation: splash-fade-in 0.6s ease; }
+.splash-school-name { font-size: 22px; font-weight: 800; color: var(--primary); text-align: center; }
+@keyframes splash-fade-in { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: scale(1); } }
+.splash-dots { display: flex; gap: 6px; }
+.splash-dots span { width: 8px; height: 8px; border-radius: 999px; background: var(--primary); opacity: .3; animation: splash-dot-pulse 1.2s infinite ease-in-out; }
+.splash-dots span:nth-child(2) { animation-delay: .2s; }
+.splash-dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes splash-dot-pulse { 0%, 80%, 100% { opacity: .3; transform: scale(.85); } 40% { opacity: 1; transform: scale(1); } }
