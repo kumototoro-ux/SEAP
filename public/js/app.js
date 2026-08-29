@@ -3026,8 +3026,9 @@ function renderDonutChartSVG(segments) {
   const arcs = segments.map((seg) => {
     const fraction = seg.value / total;
     const dash = fraction * circumference;
+    const gap = Math.max(circumference - dash, 0.001); // 🆕 مصحَّح: فجوة صفرية حرفية "X 0" تسبب عطل عرض معروف ببعض المتصفحات عند نسبة 100% لقطاع واحد — حد أدنى فعلي بدل الصفر يحلّها تماماً
     const arc = `<circle cx="80" cy="80" r="${radius}" fill="none" stroke="${seg.color}" stroke-width="22"
-      stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${-cursor}" transform="rotate(-90 80 80)"></circle>`;
+      stroke-dasharray="${dash} ${gap}" stroke-dashoffset="${-cursor}" transform="rotate(-90 80 80)"></circle>`;
     cursor += dash;
     return arc;
   }).join('');
@@ -3036,7 +3037,7 @@ function renderDonutChartSVG(segments) {
     <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
       <svg width="160" height="160" viewBox="0 0 160 160">${arcs}</svg>
       <div style="display:flex;flex-direction:column;gap:6px">
-        ${segments.map((seg) => `
+        ${segments.filter((seg) => seg.value > 0).map((seg) => `
           <div style="display:flex;align-items:center;gap:8px;font-size:12.5px">
             <span style="width:10px;height:10px;border-radius:999px;background:${seg.color};display:inline-block"></span>
             ${escapeHtml(seg.label)}: <strong>${seg.value}</strong> (${Math.round((seg.value / total) * 100)}%)
