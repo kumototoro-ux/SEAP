@@ -1178,6 +1178,27 @@ const SHEET_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000; // 🆕 يوم كامل — ن
 
 /** يتحقّق أن المعلم مصرَّح له فعلياً بهذا (الفرع/الصف/الشعبة/المادة) —
  * الأدمن بلا قيد. مطابق تماماً لنفس منطق التحقق المستخدَم بالتكاليف. */
+/** 🆕 يجيب الفصل والأسبوع الدراسي الفعليين اللي يقع فيهما تاريخ معيّن —
+ * الربط الحقيقي المطلوب بين الرصد والتقويم الدراسي (نفس نسخة الدالة
+ * الموجودة بملف attendance.js — كل ملف API مستقل بخادمه الخاص، فلا يمكن
+ * مشاركة دالة محلية بين الملفين بلا نسخها هنا صراحة؛ هذا هو السبب
+ * الحقيقي وراء "resolveTermAndWeek_ is not defined": كانت تُستخدَم هنا
+ * بلا تعريفها أصلاً بهذا الملف). لو التاريخ خارج أي فصل/أسبوع مُعرَّف،
+ * يُرجِع قيماً فارغة بلا رمي خطأ — الرصد يستمر بلا توقّف. */
+async function resolveTermAndWeek_(dateStr) {
+  const { data: term } = await supabaseAdmin.from('academic_terms').select('id, name, academic_year')
+    .lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
+  if (!term) return { termId: null, termName: null, academicYear: null, weekId: null, weekLabel: null };
+
+  const { data: week } = await supabaseAdmin.from('academic_weeks').select('id, label, week_number')
+    .eq('term_id', term.id).lte('start_date', dateStr).gte('end_date', dateStr).limit(1).maybeSingle();
+
+  return {
+    termId: term.id, termName: term.name, academicYear: term.academic_year,
+    weekId: week ? week.id : null, weekLabel: week ? (week.label || `الأسبوع ${week.week_number}`) : null,
+  };
+}
+
 function assertTeacherClassScope_(user, d) {
   if (user.role === 'role_admin') return;
   const inScope = user.branch === d.branch
