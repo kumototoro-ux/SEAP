@@ -273,10 +273,17 @@ async function handleSaveGradeDistForSubject(req, res) {
     throw err;
   }
 
-  await supabaseAdmin.from('grade_distribution').delete().eq('subject', d.subject);
+  // 🆕 حماية من فقدان البيانات: الإضافة أولاً (بمعرِّف مؤقّت مميَّز)، ثم
+  // حذف الصفوف القديمة فقط بعد نجاح الإضافة فعلياً — الترتيب السابق
+  // (حذف ثم إضافة) كان يعني: أي فشل بالإضافة (حتى لو لسبب لا علاقة له
+  // بالبيانات نفسها، كخطأ مخطط قاعدة بيانات) يمسح كل التوزيع القديم بلا
+  // رجوع (الحذف كان ينجح دائماً، والإضافة فقط تفشل).
   const rows = d.entries.map((e) => ({ subject: d.subject, eval_type: e.evalType, max_grade: e.maxScore, is_participation: e.isParticipation || false }));
-  const { error } = await supabaseAdmin.from('grade_distribution').insert(rows);
-  if (error) throw error;
+  const { data: inserted, error: insertError } = await supabaseAdmin.from('grade_distribution').insert(rows).select('id');
+  if (insertError) throw insertError;
+
+  const newIds = inserted.map((r) => r.id);
+  await supabaseAdmin.from('grade_distribution').delete().eq('subject', d.subject).not('id', 'in', `(${newIds.join(',')})`);
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
