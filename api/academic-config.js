@@ -49,7 +49,7 @@ async function recomputeGradeAggregation_(studentId, subject) {
   const { data: student, error: sError } = await supabaseAdmin.from('students').select('id, name_ar, branch, stage, grade, section').eq('id', studentId).single();
   if (sError || !student) return; // 🆕 طالب محذوف مثلاً — لا داعي لإيقاف الطلب الأساسي بسببه
 
-  const { data: distRows, error: dError } = await supabaseAdmin.from('grade_distribution').select('eval_type, max_grade').eq('subject', subject);
+  const { data: distRows, error: dError } = await supabaseAdmin.from('grade_distribution').select('eval_type, max_grade, is_participation').eq('subject', subject);
   if (dError) throw dError;
   if (!distRows || !distRows.length) return; // 🆕 لا يوجد توزيع درجات لهذي المادة بعد — لا يوجد أساس للحساب
 
@@ -57,32 +57,33 @@ async function recomputeGradeAggregation_(studentId, subject) {
     .eq('student_id', studentId).eq('assignments.subject', subject);
   if (gError) throw gError;
 
-  // 🆕 سجل المشاركة والتفاعل — يُستخدَم فقط للأنواع اللي بلا أي تكاليف/اختبارات مرتبطة بها
-  // (يمنع الاحتساب المزدوج لنفس نوع التقييم من مصدرين معاً)
-  const { data: participation, error: pError } = await supabaseAdmin.from('participation_log').select('eval_type, direction').eq('student_id', studentId).eq('subject', subject);
+  // 🆕 كشوفات الرصد المباشر تُحسَب أيضاً — نفس منطق التكاليف بالضبط (الرصد المباشر جزء من نفس الحساب الآن، لا معزول عنه)
+  const { data: sheetEntries, error: shError } = await supabaseAdmin.from('grading_sheet_entries')
+    .select('score, sheet_id, grading_sheets!inner(subject, eval_type, max_score)')
+    .eq('student_id', studentId).eq('grading_sheets.subject', subject);
+  if (shError) throw shError;
+
+  const { data: participation, error: pError } = await supabaseAdmin.from('participation_log').select('eval_type, earned_score, session_max_score').eq('student_id', studentId).eq('subject', subject);
   if (pError) throw pError;
 
   const breakdown = distRows.map((dist) => {
-    const relevant = (grades || []).filter((g) => g.assignments.eval_type === dist.eval_type && g.score !== null);
-    const earned = relevant.reduce((sum, g) => sum + Number(g.score), 0);
-    const possible = relevant.reduce((sum, g) => sum + Number(g.max_score || 0), 0);
-
-    if (possible > 0) {
-      const contribution = (earned / possible) * Number(dist.max_grade);
-      return { evalType: dist.eval_type, source: 'assignments', earned, possible, weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100 };
+    if (dist.is_participation) {
+      // 🆕 معادلة نسبية حقيقية: متوسط (الدرجة المستحقة ÷ الدرجة الكلية) لكل قيود المشاركة المسجَّلة — لا عدّاد إيجابي/سلبي بسيط
+      const relevantParticipation = (participation || []).filter((p) => p.eval_type === dist.eval_type && p.session_max_score > 0);
+      const earnedSum = relevantParticipation.reduce((sum, p) => sum + Number(p.earned_score || 0), 0);
+      const possibleSum = relevantParticipation.reduce((sum, p) => sum + Number(p.session_max_score || 0), 0);
+      const ratio = possibleSum > 0 ? earnedSum / possibleSum : 0;
+      const contribution = ratio * Number(dist.max_grade);
+      return { evalType: dist.eval_type, source: 'participation', entriesCount: relevantParticipation.length, weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100 };
     }
 
-    // 🆕 لا توجد تكاليف بهذا النوع — نجرّب المشاركة والتفاعل (معادلة نسبية: إيجابي مقابل سلبي)
-    const relevantParticipation = (participation || []).filter((p) => p.eval_type === dist.eval_type);
-    const positiveCount = relevantParticipation.filter((p) => p.direction === 'positive').length;
-    const negativeCount = relevantParticipation.filter((p) => p.direction === 'negative').length;
-    const total = positiveCount + negativeCount;
-    const ratio = total > 0 ? positiveCount / total : 0;
-    const contribution = ratio * Number(dist.max_grade);
-    return {
-      evalType: dist.eval_type, source: 'participation', positiveCount, negativeCount,
-      weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100,
-    };
+    const fromAssignments = (grades || []).filter((g) => g.assignments.eval_type === dist.eval_type && g.score !== null);
+    const fromSheets = (sheetEntries || []).filter((e) => e.grading_sheets.eval_type === dist.eval_type && e.score !== null);
+    const earned = fromAssignments.reduce((sum, g) => sum + Number(g.score), 0) + fromSheets.reduce((sum, e) => sum + Number(e.score), 0);
+    const possible = fromAssignments.reduce((sum, g) => sum + Number(g.max_score || 0), 0) + fromSheets.reduce((sum, e) => sum + Number(e.grading_sheets.max_score || 0), 0);
+
+    const contribution = possible > 0 ? (earned / possible) * Number(dist.max_grade) : 0;
+    return { evalType: dist.eval_type, source: 'assignments_and_sheets', earned, possible, weight: Number(dist.max_grade), contribution: Math.round(contribution * 100) / 100 };
   });
 
   const finalGrade = Math.round(breakdown.reduce((sum, b) => sum + b.contribution, 0) * 100) / 100;
@@ -254,7 +255,7 @@ async function handleListSubjectsForClass(req, res) {
 /* -------------------- توزيع الدرجات -------------------- */
 async function handleListGradeDist(req, res) {
   const user = requireAuth(req);
-  requireRole(user, ['role_admin']); // 🆕 كان مفقوداً — نفس نمط الثغرة السابقة
+  requireRole(user, ['role_admin', 'role_teacher']); // 🆕 إصلاح: كان محصوراً بالأدمن فقط رغم استخدامه فعلياً بواجهة المعلم (رصد جديد + المشاركة) — بيانات غير حساسة (أوزان درجات فقط)
   const { data, error } = await supabaseAdmin.from('grade_distribution').select('*').order('subject');
   if (error) throw error;
   return res.status(200).json({ success: true, data });
@@ -273,7 +274,7 @@ async function handleSaveGradeDistForSubject(req, res) {
   }
 
   await supabaseAdmin.from('grade_distribution').delete().eq('subject', d.subject);
-  const rows = d.entries.map((e) => ({ subject: d.subject, eval_type: e.evalType, max_grade: e.maxScore }));
+  const rows = d.entries.map((e) => ({ subject: d.subject, eval_type: e.evalType, max_grade: e.maxScore, is_participation: e.isParticipation || false }));
   const { error } = await supabaseAdmin.from('grade_distribution').insert(rows);
   if (error) throw error;
 
@@ -1211,7 +1212,8 @@ async function handleCreateGradingSheet(req, res) {
   const d = validateBody(createGradingSheetSchema, req.body);
   assertTeacherClassScope_(user, d);
 
-  const maxScore = await getMaxScoreForEvalType_(d.subject, d.evalType); // 🆕 Snapshot ثابت
+  // 🆕 الدرجة العظمى: يدوية لو حدَّدها المعلم صراحة، وإلا تُسحَب من توزيع الدرجات كما كانت
+  const maxScore = d.manualMaxScore !== undefined ? d.manualMaxScore : await getMaxScoreForEvalType_(d.subject, d.evalType);
   const { termId, weekId } = await resolveTermAndWeek_(d.recordDate);
 
   const { data: sheet, error: sheetError } = await supabaseAdmin.from('grading_sheets').insert({
@@ -1488,8 +1490,17 @@ async function handleAddParticipationEntry(req, res) {
   requireRole(user, ['role_admin', 'role_teacher']);
   const d = validateBody(z.object({
     studentId: z.string().min(1), subject: z.string().trim().min(1), evalType: z.string().trim().min(1),
-    direction: z.enum(['positive', 'negative']), participationType: z.string().trim().max(50).optional().nullable(), note: z.string().trim().max(300).optional().nullable(),
+    direction: z.enum(['positive', 'negative']), participationType: z.string().trim().max(50).optional().nullable(),
+    sessionMaxScore: z.number().positive('الدرجة الكلية لهذي المشاركة يجب أن تكون أكبر من صفر').max(100),
+    earnedScore: z.number().min(0), // 🆕 الدرجة المستحقة الفعلية (لا مجرد إشارة إيجابي/سلبي)
+    note: z.string().trim().max(300).optional().nullable(),
   }), req.body);
+
+  if (d.earnedScore > d.sessionMaxScore) {
+    const e = new Error(`الدرجة المستحقة لا يجب أن تتجاوز الدرجة الكلية لهذي المشاركة (${d.sessionMaxScore})`);
+    e.statusCode = 400;
+    throw e;
+  }
 
   const { data: student, error: sError } = await supabaseAdmin.from('students').select('*').eq('id', d.studentId).single();
   if (sError || !student) {
@@ -1509,14 +1520,15 @@ async function handleAddParticipationEntry(req, res) {
   const { error } = await supabaseAdmin.from('participation_log').insert({
     student_id: student.id, student_name: student.name_ar, subject: d.subject, eval_type: d.evalType,
     branch: student.branch, stage: student.stage, grade: student.grade, section: student.section,
-    direction: d.direction, participation_type: d.participationType || null, note: d.note || null, recorded_by: user.id, recorded_by_name: user.fullName,
+    direction: d.direction, participation_type: d.participationType || null, session_max_score: d.sessionMaxScore, earned_score: d.earnedScore,
+    note: d.note || null, recorded_by: user.id, recorded_by_name: user.fullName,
   });
   if (error) throw error;
 
   await supabaseAdmin.from('audit_log').insert({
     emp_id: user.id, emp_name: user.fullName, role: user.role,
     action: d.direction === 'positive' ? 'تسجيل مشاركة إيجابية' : 'تسجيل مشاركة سلبية',
-    details: { studentId: d.studentId, subject: d.subject, evalType: d.evalType }, branch: user.branch,
+    details: { studentId: d.studentId, subject: d.subject, evalType: d.evalType, earnedScore: d.earnedScore, sessionMaxScore: d.sessionMaxScore }, branch: user.branch,
   });
   await recomputeGradeAggregation_(d.studentId, d.subject); // 🆕 إعادة حساب فورية
   return res.status(200).json({ success: true, data: true });
@@ -1531,6 +1543,57 @@ async function handleListParticipationLog(req, res) {
     .eq('student_id', studentId).eq('subject', subject).order('recorded_at', { ascending: false });
   if (error) throw error;
   return res.status(200).json({ success: true, data });
+}
+
+/** 🆕 يجيب نوع التقييم المُعلَّم صراحة كـ"مشاركة وتفاعل" لمادة معيّنة —
+ * لا اختيار حر من المعلم (يمنع الخطأ الشائع باختيار "واجب" بالغلط) */
+async function handleGetParticipationBucketForSubject(req, res) {
+  requireAuth(req);
+  const { subject } = validateBody(z.object({ subject: z.string().trim().min(1) }), req.body);
+  const { data, error } = await supabaseAdmin.from('grade_distribution').select('eval_type, max_grade').eq('subject', subject).eq('is_participation', true).maybeSingle();
+  if (error) throw error;
+  return res.status(200).json({ success: true, data });
+}
+
+/** 🆕 تسجيل مشاركة لكشف صف/شعبة كامل دفعة وحدة — نفس منطق الجلسة (درجة
+ * كلية موحَّدة + درجة مستحقة لكل طالب) لكن لعدة طلاب معاً بطلب واحد */
+async function handleAddParticipationEntriesForClass(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, ['role_admin', 'role_teacher']);
+  const d = validateBody(z.object({
+    branch: z.string().min(1), grade: z.string().min(1), section: z.string().min(1), subject: z.string().trim().min(1), evalType: z.string().trim().min(1),
+    participationType: z.string().trim().max(50).optional().nullable(), sessionMaxScore: z.number().positive().max(100),
+    entries: z.array(z.object({ studentId: z.string().min(1), direction: z.enum(['positive', 'negative']), earnedScore: z.number().min(0), note: z.string().trim().max(300).optional().nullable() })).min(1),
+  }), req.body);
+
+  if (user.role === 'role_teacher') {
+    const inScope = user.branch === d.branch && (user.grades || []).includes(d.grade) && (user.sections || []).includes(d.section) && (user.subject || []).includes(d.subject);
+    if (!inScope) { const e = new Error('لا تملك صلاحية تسجيل مشاركة لهذا الصف/الشعبة/المادة'); e.statusCode = 403; throw e; }
+  }
+  for (const e of d.entries) {
+    if (e.earnedScore > d.sessionMaxScore) { const err = new Error(`تجاوز الدرجة الكلية (${d.sessionMaxScore}) لأحد الطلاب — صحّح قبل الحفظ`); err.statusCode = 400; throw err; }
+  }
+
+  const studentIds = d.entries.map((e) => e.studentId);
+  const { data: students } = await supabaseAdmin.from('students').select('id, name_ar, stage').in('id', studentIds);
+  const studentById = Object.fromEntries((students || []).map((s) => [s.id, s]));
+
+  const rows = d.entries.map((e) => ({
+    student_id: e.studentId, student_name: studentById[e.studentId]?.name_ar || null, subject: d.subject, eval_type: d.evalType,
+    branch: d.branch, stage: studentById[e.studentId]?.stage || null, grade: d.grade, section: d.section,
+    direction: e.direction, participation_type: d.participationType || null, session_max_score: d.sessionMaxScore, earned_score: e.earnedScore,
+    note: e.note || null, recorded_by: user.id, recorded_by_name: user.fullName,
+  }));
+  const { error } = await supabaseAdmin.from('participation_log').insert(rows);
+  if (error) throw error;
+
+  await supabaseAdmin.from('audit_log').insert({
+    emp_id: user.id, emp_name: user.fullName, role: user.role,
+    action: 'تسجيل مشاركة لكشف صف كامل', details: { branch: d.branch, grade: d.grade, section: d.section, subject: d.subject, studentsCount: d.entries.length, sessionMaxScore: d.sessionMaxScore }, branch: user.branch,
+  });
+
+  for (const e of d.entries) { await recomputeGradeAggregation_(e.studentId, d.subject); }
+  return res.status(200).json({ success: true, data: { count: rows.length } });
 }
 
 async function handleDeleteParticipationEntry(req, res) {
@@ -1797,6 +1860,8 @@ export default createRouter({
   listStudentsForGradingSheet: handleListStudentsForGradingSheet,
   listUnifiedGradingRecords: handleListUnifiedGradingRecords,
   addParticipationEntry: handleAddParticipationEntry,
+  addParticipationEntriesForClass: handleAddParticipationEntriesForClass,
+  getParticipationBucketForSubject: handleGetParticipationBucketForSubject,
   listParticipationLog: handleListParticipationLog,
   deleteParticipationEntry: handleDeleteParticipationEntry,
   searchStudentsForPerformance: handleSearchStudentsForPerformance,
