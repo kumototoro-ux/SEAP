@@ -2161,12 +2161,32 @@ async function renderSettingsGradeDistSection(content) {
   const evalTypes = [...(settings.continuousEvalTypes || []), ...(settings.exams || [])];
   APP.allGradeDist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
 
+  // 🆕 بطاقة موجزة لكل مادة — تُظهر حالة التوزيع الحالية بلمحة، مع زر
+  // تعديل واضح — كانت غائبة تماماً (يوجد فقط قائمة اختيار مادة واحدة
+  // بلا أي نظرة شاملة لما تم توزيعه فعلاً بباقي المواد)
+  const subjectsOverviewHtml = settings.subjects.map((subject) => {
+    const entries = APP.allGradeDist.filter((r) => r.subject === subject);
+    const total = entries.reduce((s, e) => s + Number(e.max_grade), 0);
+    const isConfigured = entries.length > 0;
+    return `
+      <div class="card" style="margin-bottom:10px;cursor:pointer" data-gd-subject-card="${escapeHtml(subject)}">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+          <div>
+            <span style="font-weight:700;font-size:13.5px">${escapeHtml(subject)}</span>
+            ${isConfigured
+              ? `<span class="week-type-badge ${total === 100 ? 'week-type-study' : 'week-type-monthly'}" style="margin-inline-start:8px">${total}/100 — ${entries.length} نوع تقييم</span>`
+              : `<span class="week-type-badge week-type-final" style="margin-inline-start:8px">⚠️ لا يوجد توزيع بعد</span>`}
+          </div>
+          <button type="button" class="btn-icon-edit" data-gd-edit="${escapeHtml(subject)}" title="تعديل التوزيع">${ICONS.edit()}</button>
+        </div>
+      </div>`;
+  }).join('');
+
   content.innerHTML = `
-    <h2 style="margin-top:0">توزيع درجات مادة</h2>
-    <p style="color:#888;font-size:12.5px;margin-top:-10px">اختر المادة، ثم أضف كل أنواع التقييم ودرجاتها — المجموع يُحسَب تلقائياً</p>
-    <div class="field"><label>المادة</label>
-      <select id="gd_subject"><option value="" disabled selected>-- اختر مادة --</option>${settings.subjects.map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select>
-    </div>
+    <h2 style="margin-top:0">توزيع درجات المواد</h2>
+    <p style="color:#888;font-size:12.5px;margin-top:-10px">اضغط على أي مادة لتعديل توزيعها — المجموع يُحسَب تلقائياً ويجب أن يصل 100</p>
+    <div id="gd_subjectsOverview" style="margin-bottom:20px">${subjectsOverviewHtml}</div>
+
     <div id="gradeDistCardBox" style="display:none">
       <h3 id="gd_cardTitle"></h3>
       <div id="gd_entriesArea"></div>
@@ -2179,12 +2199,23 @@ async function renderSettingsGradeDistSection(content) {
       <button type="button" id="gd_saveBtn" style="margin-top:14px;width:100%">حفظ توزيع هذي المادة</button>
     </div>`;
 
-  document.getElementById('gd_subject').addEventListener('change', (e) => {
-    const subject = e.target.value;
+  const selectSubjectForEdit = (subject) => {
     gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_grade), isParticipation: !!r.is_participation }));
     document.getElementById('gd_cardTitle').textContent = 'توزيع درجات: ' + subject;
     document.getElementById('gradeDistCardBox').style.display = 'block';
+    document.getElementById('gradeDistCardBox').setAttribute('data-active-subject', subject);
     renderGradeDistEntries();
+    document.getElementById('gradeDistCardBox').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  content.querySelectorAll('[data-gd-subject-card]').forEach((card) => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('[data-gd-edit]')) return; // الزر نفسه يتكفّل بالحدث
+      selectSubjectForEdit(card.getAttribute('data-gd-subject-card'));
+    });
+  });
+  content.querySelectorAll('[data-gd-edit]').forEach((btn) => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); selectSubjectForEdit(btn.getAttribute('data-gd-edit')); });
   });
 
   document.getElementById('gd_addEntryBtn').addEventListener('click', () => {
@@ -2202,7 +2233,7 @@ async function renderSettingsGradeDistSection(content) {
     const btn = document.getElementById('gd_saveBtn');
     btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
     try {
-      const subject = document.getElementById('gd_subject').value;
+      const subject = document.getElementById('gradeDistCardBox').getAttribute('data-active-subject'); // 🆕 مصحَّح: كان يقرأ من عنصر select محذوف بالتصميم الجديد (بطاقات بدل قائمة اختيار)
       await apiCall('academic-config', { method: 'POST', body: { action: 'saveGradeDistForSubject', subject, entries: gradeDistCurrentEntries } });
       showToast('تم حفظ التوزيع بنجاح', 'success');
       // 🆕 إعادة مزامنة الحالة المحلية من الخادم فعلياً بعد الحفظ الناجح
@@ -2211,6 +2242,7 @@ async function renderSettingsGradeDistSection(content) {
       APP.allGradeDist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
       gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_grade), isParticipation: !!r.is_participation }));
       renderGradeDistEntries();
+      renderSettingsGradeDistSection(document.getElementById('settingsContent')); // 🆕 يحدّث بطاقات النظرة الشاملة فوراً بعد الحفظ
     } catch (e) { showToast(e.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = 'حفظ توزيع هذي المادة'; }
   });
@@ -6551,9 +6583,15 @@ function renderPerformanceContent() {
   else renderAnalyticsDashboard(area);
 }
 
-/* -------------------- 🆕 لوحة التحليل الشاملة (فلاتر مرنة + KPI + رسوم + مقارنات) -------------------- */
+/* -------------------- 🆕 لوحة التحليل الشاملة (فلاتر مرنة بحاويات + KPI + رسوم + مقارنات) -------------------- */
+// كل فئة فلتر (فرع/مرحلة/صف/شعبة) بحاوية بصرية مستقلة تماماً، تُضاف عند
+// الحاجة فقط عبر زر "+ إضافة فلتر" (بدل عرض كل الفئات دفعة وحدة بلا
+// تمييز — كان هذا سبب "العشوائية" الفعلي).
 
 let analyticsFilters_ = { branches: [], stages: [], grades: [], sections: [] };
+let analyticsActiveCategories_ = []; // 🆕 قائمة مفاتيح الفئات المُضافة حالياً كحاويات ظاهرة
+
+const ANALYTICS_CATEGORY_LABELS_ = { branches: 'الفرع', stages: 'المرحلة', grades: 'الصف', sections: 'الشعبة' };
 
 async function renderAnalyticsDashboard(area) {
   const settings = await getSettingsOnce();
@@ -6561,38 +6599,69 @@ async function renderAnalyticsDashboard(area) {
   const isBranchMonitor = APP.user.role === 'role_branch_monitor';
   const isTeacher = APP.user.role === 'role_teacher';
 
-  const branchOptions = isAdmin ? (settings.branches || []) : isBranchMonitor ? (APP.user.allBranches || []) : [APP.user.branch];
-  const stageOptions = settings.stages || [];
-  const gradeOptions = isTeacher ? (APP.user.grades || []) : (settings.grades || []);
-  const sectionOptions = isTeacher ? (APP.user.sections || []) : (settings.sections || []);
-
-  const multiCheckbox = (title, key, options) => `
-    <div class="field">
-      <label>${title} <span style="color:#888;font-weight:400">(فاضي = الكل ${isTeacher && (key === 'grades' || key === 'sections') ? 'ضمن صفوفك' : ''})</span></label>
-      <div class="checkbox-list">
-        ${options.map((o) => `<label class="checkbox-item"><input type="checkbox" data-analytics-filter="${key}" value="${escapeHtml(o)}" ${analyticsFilters_[key].includes(o) ? 'checked' : ''}>${escapeHtml(o)}</label>`).join('')}
-      </div>
-    </div>`;
+  const optionsByKey = {
+    branches: isAdmin ? (settings.branches || []) : isBranchMonitor ? (APP.user.allBranches || []) : [APP.user.branch],
+    stages: settings.stages || [],
+    grades: isTeacher ? (APP.user.grades || []) : (settings.grades || []),
+    sections: isTeacher ? (APP.user.sections || []) : (settings.sections || []),
+  };
+  const availableCategories = Object.keys(ANALYTICS_CATEGORY_LABELS_).filter((key) => {
+    if (key === 'branches' && (isTeacher || optionsByKey.branches.length <= 1)) return false; // لا فائدة من فلتر فرع بفرع واحد فقط
+    return true;
+  });
 
   area.innerHTML = `
-    ${!isTeacher && branchOptions.length > 1 ? multiCheckbox('الفرع', 'branches', branchOptions) : ''}
-    ${multiCheckbox('المرحلة', 'stages', stageOptions)}
-    ${multiCheckbox('الصف', 'grades', gradeOptions)}
-    ${multiCheckbox('الشعبة', 'sections', sectionOptions)}
+    <div id="analyticsAddFilterRow" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"></div>
+    <div id="analyticsFilterCards"></div>
     <button type="button" id="analyticsRunBtn" style="width:100%">عرض التحليل</button>
     <div id="analyticsResultArea" style="margin-top:18px"></div>`;
 
-  area.querySelectorAll('[data-analytics-filter]').forEach((cb) => {
-    cb.addEventListener('change', (e) => {
-      const key = cb.getAttribute('data-analytics-filter');
-      const val = cb.value;
-      if (e.target.checked) { if (!analyticsFilters_[key].includes(val)) analyticsFilters_[key].push(val); }
-      else { analyticsFilters_[key] = analyticsFilters_[key].filter((v) => v !== val); }
-    });
-  });
+  function renderAddFilterRow() {
+    const remaining = availableCategories.filter((key) => !analyticsActiveCategories_.includes(key));
+    document.getElementById('analyticsAddFilterRow').innerHTML = remaining.map((key) => `
+      <button type="button" class="btn-outline-sm" data-add-filter-cat="${key}">${ICONS.plus()} ${ANALYTICS_CATEGORY_LABELS_[key]}</button>`).join('')
+      || '<p style="color:#888;font-size:11.5px;margin:0">كل الفلاتر مُضافة — النتائج تشمل كل الطلاب ضمن صلاحيتك</p>';
 
+    document.querySelectorAll('[data-add-filter-cat]').forEach((btn) => {
+      btn.addEventListener('click', () => { analyticsActiveCategories_.push(btn.getAttribute('data-add-filter-cat')); renderFilterCards(); renderAddFilterRow(); });
+    });
+  }
+
+  function renderFilterCards() {
+    const cardsArea = document.getElementById('analyticsFilterCards');
+    cardsArea.innerHTML = analyticsActiveCategories_.map((key) => `
+      <div class="analytics-filter-card">
+        <div class="analytics-filter-card-header">
+          <span>${ANALYTICS_CATEGORY_LABELS_[key]} <span style="color:#888;font-weight:400;font-size:11px">(بلا تحديد = الكل)</span></span>
+          <button type="button" class="analytics-filter-remove" data-remove-filter-cat="${key}" title="إزالة هذا الفلتر">${ICONS.close()}</button>
+        </div>
+        <div class="checkbox-list">
+          ${optionsByKey[key].map((o) => `<label class="checkbox-item"><input type="checkbox" data-analytics-filter="${key}" value="${escapeHtml(o)}" ${analyticsFilters_[key].includes(o) ? 'checked' : ''}>${escapeHtml(o)}</label>`).join('')}
+        </div>
+      </div>`).join('');
+
+    cardsArea.querySelectorAll('[data-remove-filter-cat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-remove-filter-cat');
+        analyticsActiveCategories_ = analyticsActiveCategories_.filter((k) => k !== key);
+        analyticsFilters_[key] = []; // إزالة الحاوية = رجوع لـ"الكل" لهذي الفئة
+        renderFilterCards(); renderAddFilterRow();
+      });
+    });
+    cardsArea.querySelectorAll('[data-analytics-filter]').forEach((cb) => {
+      cb.addEventListener('change', (e) => {
+        const key = cb.getAttribute('data-analytics-filter');
+        const val = cb.value;
+        if (e.target.checked) { if (!analyticsFilters_[key].includes(val)) analyticsFilters_[key].push(val); }
+        else { analyticsFilters_[key] = analyticsFilters_[key].filter((v) => v !== val); }
+      });
+    });
+  }
+
+  renderAddFilterRow();
+  renderFilterCards();
   document.getElementById('analyticsRunBtn').addEventListener('click', () => runAnalyticsQuery());
-  if (document.getElementById('analyticsResultArea')) runAnalyticsQuery(); // 🆕 تحليل فوري بلا انتظار الضغط أول مرة (يفتح على "الكل" ضمن الصلاحية)
+  runAnalyticsQuery(); // 🆕 تحليل فوري بلا انتظار الضغط أول مرة (يفتح على "الكل" ضمن الصلاحية)
 }
 
 async function runAnalyticsQuery() {
