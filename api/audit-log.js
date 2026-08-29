@@ -262,17 +262,76 @@ async function handleSendMessage(req, res) {
 }
 
 /* ===================== قائمة مواضيعي (مرسِل أو مستلم) ===================== */
+/** 🆕 يحلّ اسم شخص من (id + type) — يُستخدَم لعرض اسم الطرف الآخر
+ * بقائمة المراسلات (مُرسِل حالة الوارد، أو أول مستلم حالة المرسَل) */
+async function resolvePersonName_(id, type) {
+  if (type === 'employee') {
+    const { data } = await supabaseAdmin.from('employees').select('name_ar').eq('id', id).maybeSingle();
+    return data?.name_ar || 'موظف';
+  }
+  if (type === 'student') {
+    const { data } = await supabaseAdmin.from('students').select('name_ar').eq('id', id).maybeSingle();
+    return data?.name_ar || 'طالب';
+  }
+  if (type === 'parent') {
+    const { data } = await supabaseAdmin.from('parent_info').select('name_ar').eq('id', id).maybeSingle();
+    return data?.name_ar || 'ولي أمر';
+  }
+  return 'غير معروف';
+}
+
+/** 🆕 قائمة مواضيعي — بحلّة بريد إلكتروني كاملة: اتجاه (وارد/مرسَل)،
+ * حالة قراءة دقيقة، مقتطف آخر رسالة ووقتها، واسم الطرف الآخر محلولاً. */
 async function handleListMyThreads(req, res) {
   const user = requireAuth(req);
-  const { data: asRecipient } = await supabaseAdmin.from('chat_recipients').select('thread_id').eq('recipient_id', user.id).eq('recipient_type', 'employee');
+  const { data: asRecipient } = await supabaseAdmin.from('chat_recipients').select('thread_id, read_at').eq('recipient_id', user.id).eq('recipient_type', 'employee');
   const recipientThreadIds = (asRecipient || []).map((r) => r.thread_id);
+  const myUnreadAsRecipient = new Set((asRecipient || []).filter((r) => !r.read_at).map((r) => r.thread_id));
 
   const { data: threads, error } = await supabaseAdmin
     .from('chat_threads').select('*')
     .or(`sender_id.eq.${user.id},id.in.(${recipientThreadIds.length ? recipientThreadIds.join(',') : '0'})`)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return res.status(200).json({ success: true, data: threads });
+  if (!threads.length) return res.status(200).json({ success: true, data: [] });
+
+  const threadIds = threads.map((t) => t.id);
+  const [{ data: allMessages }, { data: allRecipients }] = await Promise.all([
+    supabaseAdmin.from('chat_messages').select('thread_id, body, sender_id, sender_type, created_at, read_at').in('thread_id', threadIds).order('created_at', { ascending: false }),
+    supabaseAdmin.from('chat_recipients').select('thread_id, recipient_id, recipient_type').in('thread_id', threadIds),
+  ]);
+
+  const lastMessageByThread = {};
+  (allMessages || []).forEach((m) => { if (!lastMessageByThread[m.thread_id]) lastMessageByThread[m.thread_id] = m; }); // أول ظهور = الأحدث (مرتَّبة تنازلياً أصلاً)
+
+  // 🆕 وارد لي غير مقروء: إما (أنا مستلم ولم أقرأ الموضوع بعد) أو (أنا مُرسِل ووصل رد جديد من طرف آخر لم أقرأه)
+  const unreadByThread = {};
+  (allMessages || []).forEach((m) => {
+    if (m.sender_id !== user.id && !m.read_at) unreadByThread[m.thread_id] = true;
+  });
+  threadIds.forEach((id) => { if (myUnreadAsRecipient.has(id)) unreadByThread[id] = true; });
+
+  const recipientsByThread = {};
+  (allRecipients || []).forEach((r) => { (recipientsByThread[r.thread_id] = recipientsByThread[r.thread_id] || []).push(r); });
+
+  const enriched = await Promise.all(threads.map(async (t) => {
+    const isSender = t.sender_id === user.id;
+    let counterpartName;
+    if (isSender) {
+      const recipients = recipientsByThread[t.id] || [];
+      const firstName = recipients.length ? await resolvePersonName_(recipients[0].recipient_id, recipients[0].recipient_type) : '—';
+      counterpartName = recipients.length > 1 ? `${firstName} +${recipients.length - 1}` : firstName;
+    } else {
+      counterpartName = await resolvePersonName_(t.sender_id, t.sender_type);
+    }
+    const last = lastMessageByThread[t.id];
+    return {
+      ...t, isSender, isUnread: !!unreadByThread[t.id], counterpartName,
+      lastMessageSnippet: last ? last.body.slice(0, 80) : '', lastMessageAt: last ? last.created_at : t.created_at,
+    };
+  }));
+
+  return res.status(200).json({ success: true, data: enriched });
 }
 
 /** يتحقّق أن المستخدم طرف فعلي بهذا الموضوع (مُرسِل أصلي أو مستلم مُدرَج)
