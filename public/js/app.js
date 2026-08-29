@@ -164,22 +164,39 @@ function renderGroupedSidebarNav(pages, activeView) {
 /* ===================== تسجيل الدخول ===================== */
 
 function renderLogin() {
+  // 🆕 شاشة افتتاحية احترافية (Splash Screen) — تُعرَض 5 ثوانٍ كاملة
+  // بشعار المدرسة واسمها بحجم كبير وواضح، بدل "دخولية لثانية واحدة"
+  // بشعار صغير. تنتقل بعدها بتلاشٍ سلس لنموذج تسجيل الدخول الفعلي.
   document.getElementById('app').innerHTML = `
-    <div class="login-wrap">
-      <div class="login-card">
-        <div class="login-logo">${mirqatLogo(44)}</div>
-        <h2>جارِ التحميل...</h2>
-      </div>
+    <div class="splash-screen" id="splashScreen">
+      <div class="splash-logo-wrap">${mirqatLogo(64)}</div>
+      <div class="splash-dots"><span></span><span></span><span></span></div>
     </div>`;
 
-  // 🆕 يجلب اسم المدرسة وشعارها من الإعدادات ويعرضهما بدل العلامة الافتراضية —
-  // "منصتي وشعارها" كما طُلِب. requiresAuth:false لأنها قبل تسجيل الدخول أصلاً.
-  getSettingsOnce().then((settings) => {
-    const schoolName = settings.schoolName || 'مِرقاة';
-    const logoHtml = settings.logoUrl
+  const minDisplayTime = new Promise((resolve) => setTimeout(resolve, 5000));
+
+  Promise.all([getSettingsOnce().catch(() => null), minDisplayTime]).then(([settings]) => {
+    const schoolName = settings?.schoolName || 'مِرقاة';
+    const splashLogoHtml = settings?.logoUrl
+      ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(schoolName)}" style="max-height:96px;max-width:280px;object-fit:contain">`
+      : mirqatLogo(64);
+    const loginLogoHtml = settings?.logoUrl
       ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(schoolName)}" style="max-height:52px;max-width:180px;object-fit:contain">`
       : mirqatLogo(44);
 
+    // 🆕 تحديث محتوى الشاشة الافتتاحية نفسها بالشعار الصحيح (لو اختلف عن الافتراضي) قبل الانتقال
+    const splash = document.getElementById('splashScreen');
+    if (splash) splash.querySelector('.splash-logo-wrap').innerHTML = splashLogoHtml + `<div class="splash-school-name">${escapeHtml(schoolName)}</div>`;
+
+    setTimeout(() => renderLoginForm(schoolName, loginLogoHtml), 400); // 🆕 لحظة إضافية لرؤية الاسم قبل الانتقال
+  });
+}
+
+function renderLoginForm(schoolName, logoHtml) {
+  const splash = document.getElementById('splashScreen');
+  if (splash) splash.classList.add('fade-out');
+
+  setTimeout(() => {
     document.getElementById('app').innerHTML = `
       <div class="login-wrap">
         <div class="login-card">
@@ -195,23 +212,7 @@ function renderLogin() {
     ['username', 'password'].forEach((id) => {
       document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
     });
-  }).catch(() => {
-    // 🆕 لو فشل جلب الإعدادات لأي سبب (مثلاً انقطاع اتصال) — نعرض العلامة الافتراضية بدل شاشة فارغة
-    document.getElementById('app').innerHTML = `
-      <div class="login-wrap">
-        <div class="login-card">
-          <div class="login-logo">${mirqatLogo(44)}</div>
-          <h2>مِرقاة</h2>
-          <div class="field"><label>اسم المستخدم</label><input id="username" type="text"></div>
-          <div class="field"><label>كلمة المرور</label><input id="password" type="password"></div>
-          <button id="loginBtn">دخول</button>
-        </div>
-      </div>`;
-    document.getElementById('loginBtn').addEventListener('click', doLogin);
-    ['username', 'password'].forEach((id) => {
-      document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
-    });
-  });
+  }, 350); // 🆕 يطابق مدة تلاشي الشاشة الافتتاحية بالـCSS
 }
 
 async function doLogin() {
@@ -279,6 +280,7 @@ function renderForceChangePassword() {
 }
 
 async function doLogout() {
+  if (idleTimer_) { clearTimeout(idleTimer_); idleTimer_ = null; } // 🆕 يوقف مراقب الخمول عند الخروج الطبيعي أيضاً
   document.getElementById('detailModalOverlay')?.remove(); // 🆕 حماية عامة — يزيل أي نافذة منبثقة عالقة قبل شاشة الدخول
   try { await apiCall('auth', { method: 'POST', body: { action: 'logout' } }); } catch (e) { /* لا يهم فشل الطلب، نمسح محلياً بأي حال */ }
   localStorage.removeItem('mirqat_token');
@@ -289,8 +291,37 @@ async function doLogout() {
 
 /* ===================== هيكل لوحة التحكم ===================== */
 
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 🆕 15 دقيقة بلا أي استخدام = تسجيل خروج تلقائي
+let idleTimer_ = null;
+
+/** 🆕 مراقب خمول — يصفّر العدّاد عند أي تفاعل حقيقي (نقر/كتابة/لمس/تمرير)،
+ * وإذا انقضت 15 دقيقة بلا أي منها، يسجّل خروج المستخدم تلقائياً — إجراء
+ * أمني إضافي مستقل تماماً عن مدة صلاحية الجلسة (6 ساعات) نفسها. */
+function resetIdleTimer_() {
+  if (idleTimer_) clearTimeout(idleTimer_);
+  idleTimer_ = setTimeout(() => {
+    if (APP.token) {
+      showToast('تم تسجيل خروجك تلقائياً بسبب عدم الاستخدام لمدة 15 دقيقة', 'error');
+      doLogout();
+    }
+  }, IDLE_TIMEOUT_MS);
+}
+
+let idleWatcherInitialized_ = false; // 🆕 يمنع تكرار ربط المستمعات لو استُدعيت bootDashboard أكثر من مرة بالجلسة
+let notifBadgeIntervalId_ = null; // 🆕 يمنع تراكم مؤقّتات تحديث الجرس
+
+function initIdleWatcher_() {
+  if (idleWatcherInitialized_) { resetIdleTimer_(); return; }
+  idleWatcherInitialized_ = true;
+  ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'].forEach((evt) => {
+    document.addEventListener(evt, resetIdleTimer_, { passive: true });
+  });
+  resetIdleTimer_();
+}
+
 function bootDashboard() {
   renderShell();
+  initIdleWatcher_(); // 🆕
   const lastView = localStorage.getItem('mirqat_lastView');
   navigate(lastView && PAGE_REGISTRY[lastView] ? lastView : pagesForCurrentUser()[0]);
 }
@@ -440,11 +471,26 @@ function renderShell() {
     }
   })();
 
-  // 🆕 عدد الرسائل غير المقروءة بالجرس — يتحدَّث عند كل تحميل للوحة
-  apiCall('audit-log', { method: 'POST', body: { action: 'unreadCount' } }).then((r) => {
-    const badge = document.getElementById('notifBadge');
-    if (badge && r.count > 0) badge.style.display = 'block';
-  }).catch(() => {});
+  // 🆕 عدد الرسائل غير المقروءة بالجرس — يتحدَّث فوراً ثم كل دقيقة تلقائياً،
+  // ويشغِّل حركة رنين لطيفة عند وجود إشعارات فعلياً (لا شارة صامتة فقط)
+  const refreshNotifBadge = () => {
+    apiCall('audit-log', { method: 'POST', body: { action: 'unreadCount' } }).then((r) => {
+      const badge = document.getElementById('notifBadge');
+      const btn = document.getElementById('notifBtn');
+      if (!badge || !btn) return;
+      if (r.count > 0) {
+        badge.style.display = 'block';
+        badge.textContent = r.count > 9 ? '9+' : r.count;
+        btn.classList.add('notif-ring');
+      } else {
+        badge.style.display = 'none';
+        btn.classList.remove('notif-ring');
+      }
+    }).catch(() => {});
+  };
+  refreshNotifBadge();
+  if (notifBadgeIntervalId_) clearInterval(notifBadgeIntervalId_); // 🆕 يمنع تراكم مؤقّتات لو renderShell تكرَّر بنفس الجلسة
+  notifBadgeIntervalId_ = setInterval(refreshNotifBadge, 60000);
   document.getElementById('notifBtn').addEventListener('click', () => navigate('messages'));
 }
 
@@ -2284,16 +2330,65 @@ function renderGradeDistEntries() {
 
 /* ===================== صفحة سجل التتبّع ===================== */
 
+/* -------------------- 🆕 سجل التتبّع — تبويبات + فلاتر (أدمن) -------------------- */
+
+const AUDIT_LOG_CATEGORIES_ = [
+  { key: 'all', label: 'الكل', keywords: [] },
+  { key: 'auth', label: 'الدخول والجلسات', keywords: ['دخول', 'كلمة مرور', 'حظر', 'خروج'] },
+  { key: 'students', label: 'الطلاب وأولياء الأمور', keywords: ['طالب', 'ولي الأمر', 'حساب طالب', 'حساب ولي'] },
+  { key: 'staff', label: 'الموظفون', keywords: ['موظف', 'مستخدم', 'تقييم', 'أداء'] },
+  { key: 'grades', label: 'الدرجات والتكاليف', keywords: ['درجة', 'تكليف', 'كشف', 'مشاركة', 'رصد'] },
+  { key: 'attendance', label: 'الحضور', keywords: ['حضور', 'غياب'] },
+  { key: 'messaging', label: 'المراسلات', keywords: ['رسالة', 'موضوع', 'مراسلة'] },
+  { key: 'settings', label: 'الإعدادات', keywords: ['إعداد', 'توزيع', 'قائمة', 'فرع جديد', 'فصل دراسي', 'أسبوع', 'إجازة'] },
+];
+
+function categorizeAuditAction_(action) {
+  const found = AUDIT_LOG_CATEGORIES_.find((c) => c.key !== 'all' && c.keywords.some((kw) => (action || '').includes(kw)));
+  return found ? found.key : 'other';
+}
+
+let auditActiveCategory_ = 'all';
+let auditFilters_ = { role: '', branch: '', dateRange: 'all' };
+
 async function renderAuditLogView() {
   const main = document.getElementById('mainContent');
+  const settings = await getSettingsOnce();
   main.innerHTML = `
     <div class="card">
-      <h2>سجل التتبّع (آخر 300 عملية)</h2>
-      <div class="field"><label>بحث بالاسم أو نوع العملية</label><input id="auditSearchInput" type="text"></div>
+      <h2 style="margin:0 0 4px">سجل التتبّع</h2>
+      <p style="color:#888;font-size:12px;margin:0 0 14px">آخر 300 عملية بالنظام</p>
+      <div class="segmented-control" id="auditCatTabs" style="margin-bottom:14px;flex-wrap:wrap">
+        ${AUDIT_LOG_CATEGORIES_.map((c) => `<button type="button" class="segmented-item ${auditActiveCategory_ === c.key ? 'active' : ''}" data-audit-cat="${c.key}">${c.label}</button>`).join('')}
+      </div>
+      <div class="af-grid-row">
+        <div class="field"><label>بحث بالاسم أو نوع العملية</label><input id="auditSearchInput" type="text"></div>
+        <div class="field"><label>الدور</label><select id="auditRoleFilter"><option value="">الكل</option>${Object.keys(ROLE_LABELS_AR).map((r) => `<option value="${r}">${ROLE_LABELS_AR[r]}</option>`).join('')}</select></div>
+        <div class="field"><label>الفرع</label><select id="auditBranchFilter"><option value="">الكل</option>${(settings.branches || []).map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`).join('')}</select></div>
+        <div class="field"><label>الفترة</label>
+          <select id="auditDateFilter">
+            <option value="all">كل الفترات</option>
+            <option value="today">اليوم</option>
+            <option value="week">هذا الأسبوع</option>
+            <option value="month">هذا الشهر</option>
+          </select>
+        </div>
+      </div>
       <div id="auditLogListArea"><div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div></div>
     </div>`;
 
+  document.querySelectorAll('#auditCatTabs .segmented-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      auditActiveCategory_ = btn.getAttribute('data-audit-cat');
+      document.querySelectorAll('#auditCatTabs .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderAuditLogTable();
+    });
+  });
   document.getElementById('auditSearchInput').addEventListener('input', renderAuditLogTable);
+  document.getElementById('auditRoleFilter').addEventListener('change', (e) => { auditFilters_.role = e.target.value; renderAuditLogTable(); });
+  document.getElementById('auditBranchFilter').addEventListener('change', (e) => { auditFilters_.branch = e.target.value; renderAuditLogTable(); });
+  document.getElementById('auditDateFilter').addEventListener('change', (e) => { auditFilters_.dateRange = e.target.value; renderAuditLogTable(); });
+
   loadAuditLogList();
 }
 
@@ -2308,9 +2403,27 @@ async function loadAuditLogList() {
 function renderAuditLogTable() {
   const area = document.getElementById('auditLogListArea');
   const q = (document.getElementById('auditSearchInput').value || '').trim().toLowerCase();
-  const list = APP.allAuditLog.filter((r) => !q || (r.emp_name || '').toLowerCase().includes(q) || (r.action || '').toLowerCase().includes(q));
 
-  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد عمليات مطابقة</p>'; return; }
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfWeek = new Date(startOfToday); startOfWeek.setDate(startOfToday.getDate() - startOfToday.getDay());
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const list = APP.allAuditLog.filter((r) => {
+    if (auditActiveCategory_ !== 'all' && categorizeAuditAction_(r.action) !== auditActiveCategory_) return false;
+    if (q && !((r.emp_name || '').toLowerCase().includes(q) || (r.action || '').toLowerCase().includes(q))) return false;
+    if (auditFilters_.role && r.role !== auditFilters_.role) return false;
+    if (auditFilters_.branch && r.branch !== auditFilters_.branch) return false;
+    if (auditFilters_.dateRange !== 'all') {
+      const recordDate = new Date(r.created_at);
+      if (auditFilters_.dateRange === 'today' && recordDate < startOfToday) return false;
+      if (auditFilters_.dateRange === 'week' && recordDate < startOfWeek) return false;
+      if (auditFilters_.dateRange === 'month' && recordDate < startOfMonth) return false;
+    }
+    return true;
+  });
+
+  if (!list.length) { area.innerHTML = '<p style="color:#888">لا توجد عمليات مطابقة للفلاتر المحدَّدة</p>'; return; }
 
   area.innerHTML = list.map((r) => `
     <div class="person-card-row" style="padding:10px 0;border-bottom:1px solid var(--surface);align-items:flex-start">
