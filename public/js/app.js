@@ -6516,15 +6516,16 @@ async function renderSheetsManagementTab() {
 // معلم: فرعه + الصف/الشعبة اللي يدرّسهم فقط. الخادم هو من يفرض النطاق
 // الحقيقي بكل استعلام — الواجهة هنا فقط لسهولة الاستخدام.
 
-let perfViewMode = 'student'; // 🆕 'student' | 'class'
+let perfViewMode = 'analytics'; // 🆕 'analytics' | 'student' | 'class' — لوحة التحليل صارت الافتراضية
 
 async function renderStudentPerformanceView() {
   const main = document.getElementById('mainContent');
   main.innerHTML = `
     <div class="card">
       <h2 style="margin:0 0 4px">أداء الطلاب</h2>
-      <p style="color:#888;font-size:12px;margin:0 0 16px">تقرير فردي لطالب، أو ملخّص لصف/شعبة كاملة</p>
+      <p style="color:#888;font-size:12px;margin:0 0 16px">لوحة تحليل شاملة، أو تقرير فردي لطالب، أو ملخّص لصف/شعبة كاملة</p>
       <div class="segmented-control" id="perfModeTabBar" style="margin-bottom:16px">
+        <button type="button" class="segmented-item ${perfViewMode === 'analytics' ? 'active' : ''}" data-perf-mode="analytics">لوحة التحليل</button>
         <button type="button" class="segmented-item ${perfViewMode === 'student' ? 'active' : ''}" data-perf-mode="student">تقرير طالب</button>
         <button type="button" class="segmented-item ${perfViewMode === 'class' ? 'active' : ''}" data-perf-mode="class">ملخّص صف/شعبة</button>
       </div>
@@ -6545,7 +6546,125 @@ async function renderStudentPerformanceView() {
 function renderPerformanceContent() {
   const area = document.getElementById('perfContentArea');
   if (perfViewMode === 'class') renderClassPerformanceSearch(area);
-  else renderStudentPerformanceSearch(area);
+  else if (perfViewMode === 'student') renderStudentPerformanceSearch(area);
+  else renderAnalyticsDashboard(area);
+}
+
+/* -------------------- 🆕 لوحة التحليل الشاملة (فلاتر مرنة + KPI + رسوم + مقارنات) -------------------- */
+
+let analyticsFilters_ = { branches: [], stages: [], grades: [], sections: [] };
+
+async function renderAnalyticsDashboard(area) {
+  const settings = await getSettingsOnce();
+  const isAdmin = APP.user.role === 'role_admin';
+  const isBranchMonitor = APP.user.role === 'role_branch_monitor';
+  const isTeacher = APP.user.role === 'role_teacher';
+
+  const branchOptions = isAdmin ? (settings.branches || []) : isBranchMonitor ? (APP.user.allBranches || []) : [APP.user.branch];
+  const stageOptions = settings.stages || [];
+  const gradeOptions = isTeacher ? (APP.user.grades || []) : (settings.grades || []);
+  const sectionOptions = isTeacher ? (APP.user.sections || []) : (settings.sections || []);
+
+  const multiCheckbox = (title, key, options) => `
+    <div class="field">
+      <label>${title} <span style="color:#888;font-weight:400">(فاضي = الكل ${isTeacher && (key === 'grades' || key === 'sections') ? 'ضمن صفوفك' : ''})</span></label>
+      <div class="checkbox-list">
+        ${options.map((o) => `<label class="checkbox-item"><input type="checkbox" data-analytics-filter="${key}" value="${escapeHtml(o)}" ${analyticsFilters_[key].includes(o) ? 'checked' : ''}>${escapeHtml(o)}</label>`).join('')}
+      </div>
+    </div>`;
+
+  area.innerHTML = `
+    ${!isTeacher && branchOptions.length > 1 ? multiCheckbox('الفرع', 'branches', branchOptions) : ''}
+    ${multiCheckbox('المرحلة', 'stages', stageOptions)}
+    ${multiCheckbox('الصف', 'grades', gradeOptions)}
+    ${multiCheckbox('الشعبة', 'sections', sectionOptions)}
+    <button type="button" id="analyticsRunBtn" style="width:100%">عرض التحليل</button>
+    <div id="analyticsResultArea" style="margin-top:18px"></div>`;
+
+  area.querySelectorAll('[data-analytics-filter]').forEach((cb) => {
+    cb.addEventListener('change', (e) => {
+      const key = cb.getAttribute('data-analytics-filter');
+      const val = cb.value;
+      if (e.target.checked) { if (!analyticsFilters_[key].includes(val)) analyticsFilters_[key].push(val); }
+      else { analyticsFilters_[key] = analyticsFilters_[key].filter((v) => v !== val); }
+    });
+  });
+
+  document.getElementById('analyticsRunBtn').addEventListener('click', () => runAnalyticsQuery());
+  if (document.getElementById('analyticsResultArea')) runAnalyticsQuery(); // 🆕 تحليل فوري بلا انتظار الضغط أول مرة (يفتح على "الكل" ضمن الصلاحية)
+}
+
+async function runAnalyticsQuery() {
+  const resultArea = document.getElementById('analyticsResultArea');
+  resultArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div><div class="skel-row"></div></div>`;
+
+  let result;
+  try {
+    result = await apiCall('academic-config', { method: 'POST', body: { action: 'getPerformanceAnalytics', ...analyticsFilters_ } });
+  } catch (e) { resultArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+
+  if (!result.totalStudents) { resultArea.innerHTML = '<p style="color:#888">لا توجد نتائج مطابقة للفلاتر المحدَّدة (تأكد من وجود درجات مرصودة أولاً)</p>'; return; }
+
+  const comparisonDimensions = [
+    { key: 'byBranch', label: 'مقارنة بين الفروع', filterKey: 'branches' },
+    { key: 'byStage', label: 'مقارنة بين المراحل', filterKey: 'stages' },
+    { key: 'byGrade', label: 'مقارنة بين الصفوف', filterKey: 'grades' },
+    { key: 'bySection', label: 'مقارنة بين الشعب', filterKey: 'sections' },
+  ].filter((d) => result[d.key] && result[d.key].length > 1); // 🆕 يظهر فقط البُعد اللي فيه أكثر من قيمة (مقارنة حقيقية)
+
+  resultArea.innerHTML = `
+    <div class="kpi-cards-row">
+      <div class="kpi-card"><div class="kpi-card-label">إجمالي الطلاب</div><div class="kpi-card-value">${result.totalStudents}</div></div>
+      <div class="kpi-card"><div class="kpi-card-label">المتوسط العام</div><div class="kpi-card-value">${result.overallAverage}</div></div>
+      <div class="kpi-card"><div class="kpi-card-label">نسبة النجاح</div><div class="kpi-card-value">${result.passRate}%</div></div>
+      <div class="kpi-card"><div class="kpi-card-label">نسبة المتفوقين</div><div class="kpi-card-value" style="color:#2F7A4D">${result.excellentPct}%</div></div>
+      <div class="kpi-card"><div class="kpi-card-label">يحتاجون دعماً</div><div class="kpi-card-value" style="color:#C4483A">${result.needsSupportPct}%</div></div>
+    </div>
+
+    <h3 style="margin-top:24px">توزيع مستويات الأداء</h3>
+    ${renderDonutChartSVG(result.distribution)}
+
+    ${comparisonDimensions.map((d) => `
+      <h3 style="margin-top:24px">${d.label}</h3>
+      ${renderBarChartSVG(result[d.key].map((r) => ({ label: `${r.label} (${r.count})`, value: r.average })), '#3E7CB1')}
+      <p style="font-size:11px;color:var(--text-muted);margin-top:-6px">اضغط على أي قيمة بالفلاتر أعلاه لتضييق نطاق التحليل أكثر (Drill-down)</p>`).join('')}
+
+    <div class="af-grid-row-2" style="margin-top:24px">
+      <div>
+        <h3>أفضل 5 طلاب</h3>
+        ${renderBarChartSVG(result.topPerformers.map((s) => ({ label: s.name, value: s.average })), '#2F7A4D')}
+      </div>
+      <div>
+        <h3>يحتاجون دعماً (أدنى 5)</h3>
+        ${renderBarChartSVG(result.bottomPerformers.map((s) => ({ label: s.name, value: s.average })), '#C4483A')}
+      </div>
+    </div>
+
+    <button type="button" id="analyticsReportBtn" style="width:100%;margin-top:20px">${ICONS.plus()} إصدار تقرير احترافي</button>`;
+
+  document.getElementById('analyticsReportBtn').addEventListener('click', () => {
+    const scopeLabel = [
+      analyticsFilters_.branches.length ? analyticsFilters_.branches.join('، ') : 'كل الفروع',
+      analyticsFilters_.grades.length ? analyticsFilters_.grades.join('، ') : null,
+      analyticsFilters_.sections.length ? analyticsFilters_.sections.join('، ') : null,
+    ].filter(Boolean).join(' — ');
+
+    const contentHtml = `
+      <div class="report-stats-row">
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${result.totalStudents}</div><div style="font-size:11.5px;color:var(--text-muted)">إجمالي الطلاب</div></div>
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:var(--primary)">${result.overallAverage}</div><div style="font-size:11.5px;color:var(--text-muted)">المتوسط العام</div></div>
+        <div class="report-stat-box"><div style="font-size:32px;font-weight:800;color:#2F7A4D">${result.passRate}%</div><div style="font-size:11.5px;color:var(--text-muted)">نسبة النجاح</div></div>
+      </div>
+      <h3 style="margin-top:24px">توزيع مستويات الأداء</h3>
+      ${renderDonutChartSVG(result.distribution)}
+      ${comparisonDimensions.map((d) => `<h3 style="margin-top:24px">${d.label}</h3>${renderBarChartSVG(result[d.key].map((r) => ({ label: `${r.label} (${r.count})`, value: r.average })), '#3E7CB1')}`).join('')}
+      <h3 style="margin-top:24px">أفضل 5 طلاب</h3>
+      ${renderBarChartSVG(result.topPerformers.map((s) => ({ label: s.name, value: s.average })), '#2F7A4D')}
+      <h3 style="margin-top:24px">يحتاجون دعماً</h3>
+      ${renderBarChartSVG(result.bottomPerformers.map((s) => ({ label: s.name, value: s.average })), '#C4483A')}`;
+
+    showProfessionalReportShell({ title: 'تقرير تحليل أداء الطلاب', branchLabel: scopeLabel, contentHtml });
+  });
 }
 
 /* -------------------- تقرير طالب فردي -------------------- */
