@@ -848,7 +848,7 @@ input[type="date"], input[type="time"], input[type="datetime-local"] {
 .cdp-header-selects select { flex: 1; padding: 6px 4px; font-size: 12.5px; border: 1px solid var(--outline); border-radius: 6px; background: var(--surface); }
 .cdp-nav-btn {
   width: 26px; height: 26px; padding: 0; border-radius: 999px; border: 1px solid var(--outline); background: var(--surface);
-  display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; color: var(--primary); /* 🆕 مصحَّح: بلا هذا كان يرث اللون الأبيض العام فيصير السهم غير مرئي تماماً */
 }
 .cdp-nav-btn svg { width: 12px; height: 12px; transform: rotate(90deg); }
 .cdp-nav-btn.cdp-nav-next svg { transform: rotate(-90deg); }
@@ -856,7 +856,7 @@ input[type="date"], input[type="time"], input[type="datetime-local"] {
 .cdp-days-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
 .cdp-day {
   aspect-ratio: 1; border: none; background: none; border-radius: 8px; font-size: 12.5px; cursor: pointer; color: var(--text);
-  display: flex; align-items: center; justify-content: center; transition: background .12s ease;
+  display: flex; align-items: center; justify-content: center; transition: background .12s ease; padding: 0; min-width: 0; /* 🆕 مصحَّح: بلا padding:0 كان الحشو العام (11px 20px) يجعل كل خانة يوم ضخمة جداً، فتفيض الشبكة كاملة خارج حدود البطاقة */
 }
 .cdp-day:hover { background: var(--surface); }
 .cdp-day.is-today { font-weight: 800; color: var(--primary); }
