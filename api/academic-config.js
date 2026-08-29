@@ -1187,15 +1187,21 @@ function assertTeacherClassScope_(user, d) {
 /** 🆕 يجيب الدرجة القصوى المُعرَّفة بتوزيع الدرجات لهذا (المادة + نوع
  * التقييم) — تُحفَظ كـSnapshot ثابت بالكشف وقت إنشائه (لا تتأثر بأي
  * تعديل لاحق على توزيع الدرجات، حفاظاً على النتائج التاريخية). */
-async function getMaxScoreForEvalType_(subject, evalType) {
+/** 🆕 يجيب وزن نوع التقييم بإعدادات المادة (مرجع عرض/تجميع فقط — ثابت،
+ * لا علاقة له بالدرجة القصوى لأي تكليف/مهمة/اختبار محدَّد، ولا يُستخدَم
+ * كقيمة افتراضية أو سحب تلقائي لها إطلاقاً). يُستخدَم فقط لعرض معلوماتي
+ * بالواجهة (توضيح للمعلم: "علماً بأن وزن هذا النوع بالدرجة النهائية = X"). */
+async function getEvalTypeWeight_(subject, evalType) {
   const { data, error } = await supabaseAdmin.from('grade_distribution').select('max_grade').eq('subject', subject).eq('eval_type', evalType).maybeSingle();
   if (error) throw error;
-  if (!data) {
-    const e = new Error(`لا يوجد توزيع درجات مُعرَّف لمادة "${subject}" بنوع تقييم "${evalType}" — أضفه أولاً من الإعدادات ← توزيع الدرجات`);
-    e.statusCode = 400;
-    throw e;
-  }
-  return Number(data.max_grade);
+  return data ? Number(data.max_grade) : null;
+}
+
+async function handleGetEvalTypeWeight(req, res) {
+  requireAuth(req);
+  const { subject, evalType } = validateBody(z.object({ subject: z.string().trim().min(1), evalType: z.string().trim().min(1) }), req.body);
+  const weight = await getEvalTypeWeight_(subject, evalType);
+  return res.status(200).json({ success: true, data: { weight } });
 }
 
 /** 🆕 حساب الأساس الزمني الفعلي لكشف (آخر إعادة فتح إن وُجدت، وإلا وقت الإنشاء) + هل لسه ضمن مهلة اليوم */
@@ -1212,8 +1218,11 @@ async function handleCreateGradingSheet(req, res) {
   const d = validateBody(createGradingSheetSchema, req.body);
   assertTeacherClassScope_(user, d);
 
-  // 🆕 الدرجة العظمى: يدوية لو حدَّدها المعلم صراحة، وإلا تُسحَب من توزيع الدرجات كما كانت
-  const maxScore = d.manualMaxScore !== undefined ? d.manualMaxScore : await getMaxScoreForEvalType_(d.subject, d.evalType);
+  // 🆕 الدرجة القصوى دائماً قرار المعلم لحظة الإنشاء — تختلف من تكليف
+  // لآخر (12 من 12 لحصة، 15 من 15 لحصة أخرى...) بلا أي علاقة بوزن نوع
+  // التقييم الثابت بإعدادات المادة (ذاك مرجع للتجميع النهائي فقط، لا
+  // يُستخدَم كقيمة افتراضية هنا إطلاقاً — لا سحب تلقائي بعد الآن)
+  const maxScore = d.maxScore;
   const { termId, weekId } = await resolveTermAndWeek_(d.recordDate);
 
   const { data: sheet, error: sheetError } = await supabaseAdmin.from('grading_sheets').insert({
@@ -1852,6 +1861,7 @@ export default createRouter({
   requestGradeEditReopen: handleRequestGradeEditReopen,
   reopenGradeEdit: handleReopenGradeEdit,
   createGradingSheet: handleCreateGradingSheet,
+  getEvalTypeWeight: handleGetEvalTypeWeight,
   listGradingSheets: handleListGradingSheets,
   getGradingSheetDetail: handleGetGradingSheetDetail,
   updateGradingSheetEntries: handleUpdateGradingSheetEntries,
