@@ -915,3 +915,17 @@ input[type="date"], input[type="time"], input[type="datetime-local"] {
 .rs-score-wrap { display: flex; align-items: center; gap: 5px; }
 .rs-score-max-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .rs-note-input { flex: 1; min-width: 120px; }
+
+/* ---------- 🆕 حاويات فلاتر لوحة التحليل (فرع/مرحلة/صف/شعبة) — كل فئة بحاوية مستقلة وواضحة ---------- */
+.analytics-filter-card {
+  border: 1.5px solid var(--outline); border-radius: var(--radius-sm); padding: 14px; margin-bottom: 12px; background: var(--surface);
+}
+.analytics-filter-card-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 13px; font-weight: 700; color: var(--primary);
+}
+.analytics-filter-remove {
+  width: 22px; height: 22px; padding: 0; border-radius: 999px; border: none; background: var(--outline);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-muted); flex-shrink: 0;
+}
+.analytics-filter-remove svg { width: 11px; height: 11px; }
+.analytics-filter-remove:hover { background: #FADAD6; color: #C4483A; }
