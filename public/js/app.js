@@ -164,31 +164,47 @@ function renderGroupedSidebarNav(pages, activeView) {
 /* ===================== تسجيل الدخول ===================== */
 
 function renderLogin() {
-  // 🆕 شاشة افتتاحية احترافية (Splash Screen) — تُعرَض 5 ثوانٍ كاملة
-  // بشعار المدرسة واسمها بحجم كبير وواضح، بدل "دخولية لثانية واحدة"
-  // بشعار صغير. تنتقل بعدها بتلاشٍ سلس لنموذج تسجيل الدخول الفعلي.
+  // 🆕 شاشة افتتاحية احترافية بمرحلتَين واضحتَين ضمن 5 ثوانٍ إجمالاً:
+  // (1) مرحلة منصّتك "مِرقاة" (الأيقونة + الاسم نصاً بوضوح) — كانت
+  // تُعرَض الأيقونة فقط بلا أي اسم، فيبدو كأن اسم المنصة لا يظهر إطلاقاً.
+  // (2) مرحلة المدرسة العميلة (شعارها واسمها الخاص من الإعدادات).
+  // ثم انتقال سلس لنموذج تسجيل الدخول الفعلي.
   document.getElementById('app').innerHTML = `
     <div class="splash-screen" id="splashScreen">
-      <div class="splash-logo-wrap">${mirqatLogo(64)}</div>
+      <div class="splash-logo-wrap" id="splashContent">
+        ${mirqatLogo(64)}
+        <div class="splash-school-name">مِرقاة</div>
+        <div class="splash-tagline">منصة تعليمية متكاملة</div>
+      </div>
       <div class="splash-dots"><span></span><span></span><span></span></div>
     </div>`;
 
-  const minDisplayTime = new Promise((resolve) => setTimeout(resolve, 5000));
+  const settingsPromise = getSettingsOnce().catch(() => null);
 
-  Promise.all([getSettingsOnce().catch(() => null), minDisplayTime]).then(([settings]) => {
+  // 🆕 بعد ثانيتين: مرحلة منصّة مِرقاة تنتهي، وتبدأ مرحلة المدرسة العميلة (3 ثوانٍ متبقّية)
+  setTimeout(() => {
+    settingsPromise.then((settings) => {
+      const schoolName = settings?.schoolName || 'مِرقاة';
+      const splashLogoHtml = settings?.logoUrl
+        ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(schoolName)}" style="max-height:96px;max-width:280px;object-fit:contain">`
+        : mirqatLogo(64);
+
+      const content = document.getElementById('splashContent');
+      if (!content) return;
+      content.classList.add('splash-stage-swap');
+      setTimeout(() => {
+        content.innerHTML = `${splashLogoHtml}<div class="splash-school-name">${escapeHtml(schoolName)}</div>`;
+        content.classList.remove('splash-stage-swap');
+      }, 250); // 🆕 يطابق مدة تلاشي الخروج بالـCSS قبل تبديل المحتوى
+    });
+  }, 2000);
+
+  Promise.all([settingsPromise, new Promise((resolve) => setTimeout(resolve, 5000))]).then(([settings]) => {
     const schoolName = settings?.schoolName || 'مِرقاة';
-    const splashLogoHtml = settings?.logoUrl
-      ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(schoolName)}" style="max-height:96px;max-width:280px;object-fit:contain">`
-      : mirqatLogo(64);
     const loginLogoHtml = settings?.logoUrl
       ? `<img src="${escapeHtml(settings.logoUrl)}" alt="${escapeHtml(schoolName)}" style="max-height:52px;max-width:180px;object-fit:contain">`
       : mirqatLogo(44);
-
-    // 🆕 تحديث محتوى الشاشة الافتتاحية نفسها بالشعار الصحيح (لو اختلف عن الافتراضي) قبل الانتقال
-    const splash = document.getElementById('splashScreen');
-    if (splash) splash.querySelector('.splash-logo-wrap').innerHTML = splashLogoHtml + `<div class="splash-school-name">${escapeHtml(schoolName)}</div>`;
-
-    setTimeout(() => renderLoginForm(schoolName, loginLogoHtml), 400); // 🆕 لحظة إضافية لرؤية الاسم قبل الانتقال
+    renderLoginForm(schoolName, loginLogoHtml);
   });
 }
 
