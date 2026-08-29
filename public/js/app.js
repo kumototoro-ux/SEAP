@@ -2181,7 +2181,7 @@ async function renderSettingsGradeDistSection(content) {
 
   document.getElementById('gd_subject').addEventListener('change', (e) => {
     const subject = e.target.value;
-    gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_grade) }));
+    gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_grade), isParticipation: !!r.is_participation }));
     document.getElementById('gd_cardTitle').textContent = 'توزيع درجات: ' + subject;
     document.getElementById('gradeDistCardBox').style.display = 'block';
     renderGradeDistEntries();
@@ -2215,13 +2215,26 @@ function renderGradeDistEntries() {
   area.innerHTML = gradeDistCurrentEntries.length
     ? gradeDistCurrentEntries.map((e, i) => `
       <div class="modal-detail-row">
-        <span class="modal-detail-label">${escapeHtml(e.evalType)}</span>
-        <span class="modal-detail-value" style="display:flex;align-items:center;gap:8px">${e.maxScore}<span data-remove-entry="${i}" style="cursor:pointer;color:#c62828">${ICONS.close()}</span></span>
+        <span class="modal-detail-label">${escapeHtml(e.evalType)} ${e.isParticipation ? '<span style="color:#2F7A4D;font-size:10.5px;font-weight:800">(المشاركة والتفاعل)</span>' : ''}</span>
+        <span class="modal-detail-value" style="display:flex;align-items:center;gap:8px">
+          <label style="display:flex;align-items:center;gap:4px;font-size:10.5px;font-weight:400;color:var(--text-muted);cursor:pointer">
+            <input type="checkbox" data-mark-participation="${i}" ${e.isParticipation ? 'checked' : ''} style="cursor:pointer">هذا نوع المشاركة
+          </label>
+          ${e.maxScore}<span data-remove-entry="${i}" style="cursor:pointer;color:#c62828">${ICONS.close()}</span>
+        </span>
       </div>`).join('')
     : '<p style="color:#aaa;font-size:12.5px">لا توجد تقييمات مضافة بعد</p>';
 
   area.querySelectorAll('[data-remove-entry]').forEach((el) => {
     el.addEventListener('click', () => { gradeDistCurrentEntries.splice(Number(el.getAttribute('data-remove-entry')), 1); renderGradeDistEntries(); });
+  });
+  // 🆕 نوع واحد فقط لكل مادة يمكن تعليمه كـ"مشاركة وتفاعل" — تعليم نوع جديد يُلغي أي تعليم سابق تلقائياً
+  area.querySelectorAll('[data-mark-participation]').forEach((cb) => {
+    cb.addEventListener('change', (e) => {
+      const idx = Number(cb.getAttribute('data-mark-participation'));
+      gradeDistCurrentEntries.forEach((entry, i) => { entry.isParticipation = (i === idx) && e.target.checked; });
+      renderGradeDistEntries();
+    });
   });
 
   const total = gradeDistCurrentEntries.reduce((s, e) => s + e.maxScore, 0);
@@ -4025,50 +4038,149 @@ function formatDateAr(dateStr) {
   } catch (e) { return dateStr; }
 }
 
-/* ===================== 🆕 حل جذري لتشوّه عرض حقول التاريخ بالجوال ===================== */
-// منتقي التاريخ الأصلي (<input type="date">) له عطل موثَّق تحديداً
-// بمتصفح Chrome على أندرويد الحقيقي (لا يظهر بمحاكي المطوّر) داخل صفحات
-// RTL — يعرض الأرقام بترتيب مبعثر (direction/unicode-bidi بمستوى CSS لا
-// يكفيان لحله بالكامل، لأن المتصفح نفسه يتحكّم بتنسيق القيمة الداخلي
-// لهذا النوع من الحقول، لا الصفحة). الحل الجذري الوحيد: التوقّف عن
-// الاعتماد على عرض المتصفح للقيمة إطلاقاً — الحقل الأصلي يبقى شفافاً
-// تماماً (لفتح منتقي التاريخ الأصلي عند الضغط، ولحفظ القيمة بصيغة
-// YYYY-MM-DD الصحيحة عند الاختيار)، بينما نعرض **نحن** القيمة بتنسيق
-// عربي واضح بطبقة منفصلة فوقه بالكامل تحت تحكّمنا الكامل.
-// يُطبَّق تلقائياً على أي حقل تاريخ حالي أو مستقبلي بلا أي تعديل يدوي
-// لكل صفحة على حدة — عبر مراقب DOM واحد يُفعَّل مرة عند بدء التطبيق.
+/* ===================== 🆕 منتقي تاريخ مخصَّص بالكامل (حل جذري نهائي) ===================== */
+// بعد فشل حلَّين متتاليَين معتمدين على منتقي التاريخ الأصلي للمتصفح
+// (<input type="date">) — لأن المتصفح نفسه (تحديداً Chrome على أندرويد
+// الحقيقي) يتحكّم بتنسيق عرضه الداخلي بطريقة لا تتوافق مع RTL، والحلول
+// الطبقية فوقه (شفافية/نص مصاحب) كانت دائماً ترقيعاً جزئياً — الحل
+// الوحيد المضمون 100% على الجوال وسطح المكتب معاً: بناء منتقي تقويم
+// مخصَّص بالكامل بـHTML/CSS/JS تحت تحكّمنا الكامل، بلا أي اعتماد على
+// تصيير المتصفح الأصلي إطلاقاً. الحقل الأصلي (<input type="date">)
+// يبقى موجوداً بالـDOM (مخفياً تماماً) لضمان توافق كل الكود الحالي
+// اللي يقرأ/يكتب .value مباشرة (نماذج الإضافة/التعديل بكل الصفحات) —
+// بلا أي تعديل مطلوب لأي صفحة أخرى بالموقع.
 
-function wrapDateInputWithArabicDisplay_(input) {
+const ARABIC_WEEKDAY_SHORT_ = ['أحد', 'إثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
+const ARABIC_MONTH_NAMES_ = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+
+/** يعترض get/set لخاصية .value لعنصر إدخال معيَّن — يسمح لنا نرصد أي
+ * تغيير برمجي للقيمة (مثال: كود التعديل يكتب input.value = '...') بدون
+ * كسر القراءة/الكتابة الطبيعية لأي كود موجود أصلاً بالموقع. */
+function makeInputValueObservable_(input, onProgrammaticChange) {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+  Object.defineProperty(input, 'value', {
+    get() { return descriptor.get.call(this); },
+    set(v) { descriptor.set.call(this, v); onProgrammaticChange(); },
+    configurable: true,
+  });
+}
+
+function buildCustomDatePicker_(input) {
   if (input.dataset.wrapped) return;
   input.dataset.wrapped = 'true';
-
-  // 🆕 إصلاح حرج: التصميم السابق (طبقة شفافة فوق الحقل) كان يجمّد الحقل
-  // بسطح المكتب بالكامل — مخاطرة تصميمية غير ضرورية. الحل الأضمن: الحقل
-  // الأصلي يبقى طبيعياً تماماً بلا أي تعديل على تفاعله (نقر/كتابة/تنقّل
-  // بالكيبورد كلها أصلية 100%)، ونضيف فقط نص تأكيد عربي صغير **بجانبه**
-  // (لا فوقه) يوضّح التاريخ المختار بصيغة صحيحة دائماً — بلا أي خطر على
-  // وظيفة الحقل نفسه مهما كان عطل عرضه الداخلي بمتصفح الجوال.
-  const display = document.createElement('div');
-  display.className = 'date-display-hint';
-  input.insertAdjacentElement('afterend', display);
-
   const isDateTime = input.type === 'datetime-local';
-  const updateDisplay = () => {
-    if (!input.value) { display.textContent = ''; return; }
-    if (isDateTime) {
-      const [datePart, timePart] = input.value.split('T');
-      display.textContent = `📅 ${formatDateAr(datePart)} — ${(timePart || '').slice(0, 5)}`;
-    } else {
-      display.textContent = `📅 ${formatDateAr(input.value)}`;
-    }
+
+  input.style.display = 'none'; // 🆕 الحقل الأصلي مخفٍ بالكامل — موجود فقط لحفظ القيمة والتوافق مع الكود الحالي
+
+  const wrap = document.createElement('div');
+  wrap.className = 'cdp-wrap';
+  input.insertAdjacentElement('afterend', wrap);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'cdp-display-btn';
+  wrap.appendChild(btn);
+
+  const popover = document.createElement('div');
+  popover.className = 'cdp-popover';
+  wrap.appendChild(popover);
+
+  const getCurrentDate = () => {
+    if (!input.value) return null;
+    const datePart = isDateTime ? input.value.split('T')[0] : input.value;
+    return parseISODateLocal(datePart);
   };
-  updateDisplay();
-  input.addEventListener('input', updateDisplay);
-  input.addEventListener('change', updateDisplay);
+  const getCurrentTime = () => {
+    if (!isDateTime || !input.value || !input.value.includes('T')) return '08:00';
+    return input.value.split('T')[1]?.slice(0, 5) || '08:00';
+  };
+
+  let viewDate = getCurrentDate() || new Date();
+
+  const updateButtonLabel = () => {
+    if (!input.value) { btn.textContent = input.placeholder || 'اختر التاريخ'; btn.classList.add('is-empty'); return; }
+    btn.classList.remove('is-empty');
+    const d = getCurrentDate();
+    btn.textContent = isDateTime ? `📅 ${formatDateAr(d ? toISODateLocal(d) : '')} — ${getCurrentTime()}` : formatDateAr(toISODateLocal(d));
+  };
+
+  const setValue = (date, time) => {
+    const iso = toISODateLocal(date);
+    input.value = isDateTime ? `${iso}T${time || getCurrentTime()}` : iso;
+    updateButtonLabel();
+    input.dispatchEvent(new Event('change', { bubbles: true })); // 🆕 يُبقي كل مستمعات change الحالية بالموقع تعمل بلا أي تعديل
+  };
+
+  function renderCalendar() {
+    const year = viewDate.getFullYear();
+    const month = viewDate.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const startOffset = firstDay.getDay(); // 0=الأحد
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const selected = getCurrentDate();
+    const yearOptions = Array.from({ length: 121 }, (_, i) => year - 100 + i); // 🆕 مدى واسع لتواريخ الميلاد
+
+    let cells = '';
+    for (let i = 0; i < startOffset; i++) cells += '<span class="cdp-day cdp-day-empty"></span>';
+    for (let d = 1; d <= daysInMonth; d++) {
+      const isSelected = selected && selected.getFullYear() === year && selected.getMonth() === month && selected.getDate() === d;
+      const isToday = new Date().toDateString() === new Date(year, month, d).toDateString();
+      cells += `<button type="button" class="cdp-day ${isSelected ? 'is-selected' : ''} ${isToday ? 'is-today' : ''}" data-cdp-day="${d}">${d}</button>`;
+    }
+
+    popover.innerHTML = `
+      <div class="cdp-header">
+        <button type="button" class="cdp-nav-btn" data-cdp-nav="prev">${ICONS.chevronDown()}</button>
+        <div class="cdp-header-selects">
+          <select class="cdp-month-select">${ARABIC_MONTH_NAMES_.map((m, i) => `<option value="${i}" ${i === month ? 'selected' : ''}>${m}</option>`).join('')}</select>
+          <select class="cdp-year-select">${yearOptions.map((y) => `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`).join('')}</select>
+        </div>
+        <button type="button" class="cdp-nav-btn cdp-nav-next" data-cdp-nav="next">${ICONS.chevronDown()}</button>
+      </div>
+      <div class="cdp-weekdays">${ARABIC_WEEKDAY_SHORT_.map((w) => `<span>${w}</span>`).join('')}</div>
+      <div class="cdp-days-grid">${cells}</div>
+      ${isDateTime ? `<div class="cdp-time-row"><label>الوقت</label><input type="time" class="cdp-time-input" value="${getCurrentTime()}"></div>` : ''}
+      <button type="button" class="cdp-today-btn">اليوم</button>`;
+
+    popover.querySelector('[data-cdp-nav="prev"]').addEventListener('click', () => { viewDate = new Date(year, month - 1, 1); renderCalendar(); });
+    popover.querySelector('[data-cdp-nav="next"]').addEventListener('click', () => { viewDate = new Date(year, month + 1, 1); renderCalendar(); });
+    popover.querySelector('.cdp-month-select').addEventListener('change', (e) => { viewDate = new Date(year, Number(e.target.value), 1); renderCalendar(); });
+    popover.querySelector('.cdp-year-select').addEventListener('change', (e) => { viewDate = new Date(Number(e.target.value), month, 1); renderCalendar(); });
+    popover.querySelectorAll('[data-cdp-day]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const day = Number(el.getAttribute('data-cdp-day'));
+        const time = isDateTime ? popover.querySelector('.cdp-time-input').value : null;
+        setValue(new Date(year, month, day), time);
+        popover.classList.remove('show');
+      });
+    });
+    popover.querySelector('.cdp-time-input')?.addEventListener('change', (e) => {
+      const d = getCurrentDate() || new Date();
+      setValue(d, e.target.value);
+    });
+    popover.querySelector('.cdp-today-btn').addEventListener('click', () => {
+      const now = new Date();
+      viewDate = now;
+      setValue(now, isDateTime ? getCurrentTime() : null);
+      renderCalendar();
+      popover.classList.remove('show');
+    });
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const willShow = !popover.classList.contains('show');
+    document.querySelectorAll('.cdp-popover.show').forEach((p) => p.classList.remove('show')); // 🆕 يُغلق أي منتقٍ آخر مفتوح
+    if (willShow) { viewDate = getCurrentDate() || new Date(); renderCalendar(); popover.classList.add('show'); }
+  });
+  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) popover.classList.remove('show'); });
+
+  makeInputValueObservable_(input, updateButtonLabel); // 🆕 أي تغيير برمجي لـ.value (بكود تعديل السجلات الحالي) يُحدِّث الزر تلقائياً
+  updateButtonLabel();
 }
 
 function scanAndWrapDateInputs_() {
-  document.querySelectorAll('input[type="date"]:not([data-wrapped]), input[type="datetime-local"]:not([data-wrapped])').forEach(wrapDateInputWithArabicDisplay_);
+  document.querySelectorAll('input[type="date"]:not([data-wrapped]), input[type="datetime-local"]:not([data-wrapped])').forEach(buildCustomDatePicker_);
 }
 
 function initDateInputAutoWrap_() {
@@ -5840,13 +5952,26 @@ async function openNewSheetFlow() {
     <div class="field"><label>عنوان التقييم</label><input type="text" id="ns_title" placeholder="مثال: اختبار الوحدة الثالثة"></div>
     <div class="field"><label>وصف التقييم (اختياري)</label><textarea id="ns_description" rows="2" placeholder="مثال: اختبار ورقي تم إجراؤه داخل المدرسة"></textarea></div>
     <div class="field"><label>تاريخ الرصد</label><input type="date" id="ns_recordDate" value="${todayISO()}"></div>
+
+    <div class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row-reverse;justify-content:flex-end">
+      <label for="ns_manualMaxToggle" style="margin:0;cursor:pointer">تحديد الدرجة الكلية يدوياً لهذا التقييم</label>
+      <input type="checkbox" id="ns_manualMaxToggle" style="width:18px;height:18px;cursor:pointer">
+    </div>
+    <div class="field" id="ns_manualMaxField" style="display:none"><label>الدرجة الكلية (مثال: 20)</label><input type="number" min="0.5" step="0.5" id="ns_manualMaxInput"></div>
     <div id="ns_maxScoreDisplay" style="margin:10px 0;font-size:12.5px;color:var(--text-muted)"></div>
+
     <button type="button" id="ns_showRosterBtn" style="width:100%">عرض الكشف</button>
     <div id="ns_rosterArea" style="margin-top:16px"></div>`;
 
   document.getElementById('backToRecordBtn').addEventListener('click', renderUnifiedRecordTab);
 
+  document.getElementById('ns_manualMaxToggle').addEventListener('change', (e) => {
+    document.getElementById('ns_manualMaxField').style.display = e.target.checked ? 'block' : 'none';
+    document.getElementById('ns_maxScoreDisplay').style.display = e.target.checked ? 'none' : 'block';
+  });
+
   const refreshMaxScore = async () => {
+    if (document.getElementById('ns_manualMaxToggle').checked) return; // 🆕 لا حاجة للسحب التلقائي لو المعلم يحدّد يدوياً
     const subject = document.getElementById('ns_subject').value;
     const evalType = document.getElementById('ns_evalType').value;
     const display = document.getElementById('ns_maxScoreDisplay');
@@ -5854,7 +5979,7 @@ async function openNewSheetFlow() {
     try {
       const dist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
       const match = dist.find((d) => d.subject === subject && d.eval_type === evalType);
-      display.textContent = match ? `✅ الدرجة الكلية المُعرَّفة: ${match.max_grade}` : '⚠️ لا يوجد توزيع درجات مُعرَّف لهذا الاختيار — أضفه أولاً من الإعدادات ← توزيع الدرجات';
+      display.textContent = match ? `✅ الدرجة الكلية المُعرَّفة: ${match.max_grade}` : '⚠️ لا يوجد توزيع درجات مُعرَّف لهذا الاختيار — فعِّل "تحديد الدرجة الكلية يدوياً" أعلاه، أو أضِفه من الإعدادات ← توزيع الدرجات';
     } catch (e) { display.textContent = ''; }
   };
   document.getElementById('ns_subject').addEventListener('change', refreshMaxScore);
@@ -5864,6 +5989,20 @@ async function openNewSheetFlow() {
   document.getElementById('ns_showRosterBtn').addEventListener('click', async () => {
     const grade = document.getElementById('ns_grade').value;
     const section = document.getElementById('ns_section').value;
+    const useManualMax = document.getElementById('ns_manualMaxToggle').checked;
+    const manualMaxScore = useManualMax ? Number(document.getElementById('ns_manualMaxInput').value) : null;
+    if (useManualMax && (!manualMaxScore || manualMaxScore <= 0)) { showToast('أدخل درجة كلية صحيحة', 'error'); return; }
+
+    let maxScoreForDisplay = manualMaxScore;
+    if (!useManualMax) {
+      try {
+        const dist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
+        const match = dist.find((d) => d.subject === document.getElementById('ns_subject').value && d.eval_type === document.getElementById('ns_evalType').value);
+        if (!match) { showToast('لا يوجد توزيع درجات مُعرَّف — فعِّل التحديد اليدوي أو أضِف التوزيع بالإعدادات أولاً', 'error'); return; }
+        maxScoreForDisplay = Number(match.max_grade);
+      } catch (e) { showToast(e.message, 'error'); return; }
+    }
+
     const rosterArea = document.getElementById('ns_rosterArea');
     rosterArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
     let roster;
@@ -5874,24 +6013,45 @@ async function openNewSheetFlow() {
     if (!roster.length) { rosterArea.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
 
     rosterArea.innerHTML = `
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">الدرجة الكلية لهذا التقييم: <strong style="color:var(--primary)">${maxScoreForDisplay}</strong></p>
       <div style="display:flex;flex-direction:column;gap:6px">
         ${roster.map((s) => `
           <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
             <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(s.name_ar)}</span>
-            <input type="number" min="0" step="0.5" placeholder="الدرجة" style="width:90px" data-ns-score="${s.id}">
+            <div style="display:flex;align-items:center;gap:4px">
+              <input type="number" min="0" max="${maxScoreForDisplay}" step="0.5" placeholder="الدرجة" style="width:80px" data-ns-score="${s.id}">
+              <span style="font-size:11.5px;color:var(--text-muted);white-space:nowrap">من ${maxScoreForDisplay}</span>
+            </div>
             <input type="text" placeholder="ملاحظة" style="flex:1;min-width:120px" data-ns-note="${s.id}">
           </div>`).join('')}
       </div>
       <button type="button" id="ns_saveSheetBtn" style="width:100%;margin-top:14px">حفظ الكشف</button>`;
 
+    // 🆕 تنبيه فوري لو المعلم أدخل درجة تتجاوز الدرجة الكلية — بلا انتظار الحفظ
+    rosterArea.querySelectorAll('[data-ns-score]').forEach((input) => {
+      input.addEventListener('input', () => {
+        const val = Number(input.value);
+        input.style.borderColor = (input.value !== '' && val > maxScoreForDisplay) ? '#C4483A' : '';
+      });
+    });
+
     document.getElementById('ns_saveSheetBtn').addEventListener('click', async () => {
       const title = document.getElementById('ns_title').value.trim();
       if (!title) { showToast('عنوان التقييم مطلوب', 'error'); return; }
+
       const entries = roster.map((s) => ({
-        studentId: s.id,
+        studentId: s.id, name: s.name_ar,
         score: rosterArea.querySelector(`[data-ns-score="${s.id}"]`).value === '' ? null : Number(rosterArea.querySelector(`[data-ns-score="${s.id}"]`).value),
         note: rosterArea.querySelector(`[data-ns-note="${s.id}"]`).value.trim() || null,
       }));
+
+      // 🆕 تنبيهات ذكية قبل الحفظ — تجاوز الدرجة الكلية (يمنع الحفظ)، ونسيان الرصد (يسأل تأكيداً — الصفر درجة مستحقة فعلية، لا "نسيان")
+      const exceeding = entries.filter((e) => e.score !== null && e.score > maxScoreForDisplay);
+      if (exceeding.length) { showToast(`تجاوز الدرجة الكلية: ${exceeding.map((e) => e.name).join('، ')} — عدّل الدرجة قبل الحفظ`, 'error'); return; }
+
+      const missing = entries.filter((e) => e.score === null);
+      if (missing.length && !confirm(`لم تُرصد درجة للطلاب: ${missing.map((e) => e.name).join('، ')}. هل تريد الحفظ مع ذلك؟`)) return;
+
       const btn = document.getElementById('ns_saveSheetBtn');
       btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
       try {
@@ -5901,7 +6061,9 @@ async function openNewSheetFlow() {
             action: 'createGradingSheet', branch, grade, section,
             subject: document.getElementById('ns_subject').value, evalType: document.getElementById('ns_evalType').value,
             title, description: document.getElementById('ns_description').value.trim() || null,
-            recordDate: document.getElementById('ns_recordDate').value, entries,
+            recordDate: document.getElementById('ns_recordDate').value,
+            manualMaxScore: useManualMax ? manualMaxScore : undefined,
+            entries: entries.map(({ studentId, score, note }) => ({ studentId, score, note })),
           },
         });
         showToast('تم حفظ الكشف بنجاح', 'success');
@@ -5960,12 +6122,19 @@ async function openSheetDetail(sheetId, returnTo) {
   if (canEdit) {
     document.getElementById('saveSheetEntriesBtn').addEventListener('click', async () => {
       const updated = entries.map((e) => ({
-        studentId: e.student_id,
+        studentId: e.student_id, name: e.student_name,
         score: document.querySelector(`[data-sheet-score="${e.student_id}"]`).value === '' ? null : Number(document.querySelector(`[data-sheet-score="${e.student_id}"]`).value),
         note: document.querySelector(`[data-sheet-note="${e.student_id}"]`).value.trim() || null,
       }));
+
+      // 🆕 نفس التنبيهات الذكية المطبَّقة بالإنشاء — تجاوز الدرجة الكلية يمنع الحفظ، ونسيان الرصد يسأل تأكيداً
+      const exceeding = updated.filter((e) => e.score !== null && e.score > sheet.max_score);
+      if (exceeding.length) { showToast(`تجاوز الدرجة الكلية: ${exceeding.map((e) => e.name).join('، ')} — عدّل الدرجة قبل الحفظ`, 'error'); return; }
+      const missing = updated.filter((e) => e.score === null);
+      if (missing.length && !confirm(`لم تُرصد درجة للطلاب: ${missing.map((e) => e.name).join('، ')}. هل تريد الحفظ مع ذلك؟`)) return;
+
       try {
-        await apiCall('academic-config', { method: 'POST', body: { action: 'updateGradingSheetEntries', sheetId, entries: updated } });
+        await apiCall('academic-config', { method: 'POST', body: { action: 'updateGradingSheetEntries', sheetId, entries: updated.map(({ studentId, score, note }) => ({ studentId, score, note })) } });
         showToast('تم حفظ التعديلات', 'success');
         openSheetDetail(sheetId, returnTo);
       } catch (e) { showToast(e.message, 'error'); }
@@ -5982,12 +6151,49 @@ async function openSheetDetail(sheetId, returnTo) {
   });
 }
 
-/* -------------------- تبويب 2: المشاركة والتفاعل -------------------- */
+/* -------------------- تبويب 2: المشاركة والتفاعل (أُعيد بناؤه بالكامل) -------------------- */
+// إصلاحات جوهرية: (1) نوع التقييم لم يعد اختياراً حراً يخاطر بالخطأ
+// (زي اختيار "واجب" بالغلط) — يُكتَشف تلقائياً من التعليم الصريح
+// is_participation بتوزيع الدرجات. (2) درجة كلية للجلسة نفسها يحدّدها
+// المعلم + درجة مستحقة فعلية لكل طالب (لا مجرد عدّاد إيجابي/سلبي).
+// (3) نمطان: طالب واحد، أو كشف صف/شعبة كامل دفعة وحدة.
 
 const PARTICIPATION_TYPES_ = ['مشاركة', 'إجابة', 'تفاعل', 'نشاط', 'مبادرة', 'أداء متميز'];
+let participationMode_ = 'single'; // 'single' | 'class'
 
 async function renderParticipationTab() {
   const area = document.getElementById('gradesContentArea');
+  area.innerHTML = `
+    <div class="segmented-control" id="participationModeBar" style="margin-bottom:14px">
+      <button type="button" class="segmented-item ${participationMode_ === 'single' ? 'active' : ''}" data-part-mode="single">طالب واحد</button>
+      <button type="button" class="segmented-item ${participationMode_ === 'class' ? 'active' : ''}" data-part-mode="class">كشف صف/شعبة كامل</button>
+    </div>
+    <div id="participationModeArea"></div>`;
+
+  document.querySelectorAll('#participationModeBar .segmented-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      participationMode_ = btn.getAttribute('data-part-mode');
+      document.querySelectorAll('#participationModeBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderParticipationModeArea();
+    });
+  });
+  renderParticipationModeArea();
+}
+
+function renderParticipationModeArea() {
+  if (participationMode_ === 'class') renderParticipationClassMode();
+  else renderParticipationSingleMode();
+}
+
+/** 🆕 يجيب دلو المشاركة المُعلَّم صراحة لمادة معيّنة — بلا اختيار حر */
+async function fetchParticipationBucket_(subject) {
+  return apiCall('academic-config', { method: 'POST', body: { action: 'getParticipationBucketForSubject', subject } });
+}
+
+/* ----- نمط 1: طالب واحد ----- */
+
+function renderParticipationSingleMode() {
+  const area = document.getElementById('participationModeArea');
   area.innerHTML = `
     <div class="field"><label>ابحث باسم الطالب</label><input type="text" id="participationStudentSearch" placeholder="اكتب اسم الطالب..."></div>
     <div id="participationSearchResults" style="margin-top:10px"></div>
@@ -6029,37 +6235,65 @@ async function openParticipationDetail(studentId, studentName) {
   area.innerHTML = `
     <div class="card">
       <h3 style="margin:0 0 10px">${escapeHtml(studentName)}</h3>
-      <div class="af-grid-row">
-        <div class="field"><label>المادة</label><select id="part_subject">${subjectOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
-        <div class="field"><label>نوع التقييم (بتوزيع الدرجات)</label><select id="part_evaltype">${(settings.continuousEvalTypes || []).map((v) => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('')}</select></div>
-      </div>
-      <div class="field"><label>نوع المشاركة</label><select id="part_type">${PARTICIPATION_TYPES_.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select></div>
-      <div style="display:flex;gap:10px;margin-top:10px">
-        <button type="button" id="part_addPositiveBtn" style="flex:1;background:#2F7A4D">+ إيجابي</button>
-        <button type="button" id="part_addNegativeBtn" style="flex:1;background:#C4483A">− سلبي</button>
-      </div>
-      <div class="field" style="margin-top:10px"><label>ملاحظة (اختياري)</label><input type="text" id="part_note" placeholder="مثال: تفاعل ممتاز بالنقاش"></div>
+      <div class="field"><label>المادة</label><select id="part_subject">${subjectOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+      <div id="part_bucketInfo" style="margin-bottom:10px"></div>
+      <div id="part_entryForm"></div>
       <div id="participationScoreArea" style="margin-top:16px"></div>
       <div id="participationHistoryArea" style="margin-top:12px"></div>
     </div>`;
 
-  const loadForCurrentSubject = () => loadParticipationForStudentSubject(studentId, studentName, document.getElementById('part_subject').value);
-  document.getElementById('part_subject').addEventListener('change', loadForCurrentSubject);
-  document.getElementById('part_addPositiveBtn').addEventListener('click', () => submitParticipationEntry(studentId, 'positive'));
-  document.getElementById('part_addNegativeBtn').addEventListener('click', () => submitParticipationEntry(studentId, 'negative'));
-  loadForCurrentSubject();
+  const refreshForSubject = () => loadParticipationBucketAndForm(document.getElementById('part_subject').value, studentId, studentName);
+  document.getElementById('part_subject').addEventListener('change', refreshForSubject);
+  refreshForSubject();
 }
 
-async function submitParticipationEntry(studentId, direction) {
-  const subject = document.getElementById('part_subject').value;
-  const evalType = document.getElementById('part_evaltype').value;
+async function loadParticipationBucketAndForm(subject, studentId, studentName) {
+  const infoBox = document.getElementById('part_bucketInfo');
+  const formBox = document.getElementById('part_entryForm');
+  infoBox.innerHTML = '<p style="color:#888;font-size:12px">جارِ التحقق...</p>';
+  formBox.innerHTML = '';
+
+  let bucket;
+  try { bucket = await fetchParticipationBucket_(subject); } catch (e) { infoBox.innerHTML = `<p style="color:#c62828;font-size:12px">${escapeHtml(e.message)}</p>`; return; }
+
+  if (!bucket) {
+    infoBox.innerHTML = `<p style="color:#c47a00;font-size:12px">⚠️ لا يوجد نوع تقييم مُعلَّم كـ"المشاركة والتفاعل" لهذي المادة بعد — الأدمن يحدّده من الإعدادات ← توزيع الدرجات</p>`;
+    return;
+  }
+  infoBox.innerHTML = `<p style="color:#2F7A4D;font-size:12px">✅ ${escapeHtml(bucket.eval_type)} — الحد الأقصى العام لهذي المادة: ${bucket.max_grade}</p>`;
+
+  formBox.innerHTML = `
+    <div class="field"><label>نوع المشاركة</label><select id="part_type">${PARTICIPATION_TYPES_.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select></div>
+    <div class="af-grid-row-2">
+      <div class="field"><label>الدرجة الكلية لهذي المشاركة</label><input type="number" min="0.5" step="0.5" id="part_sessionMax" placeholder="مثال: 3"></div>
+      <div class="field"><label>الدرجة المستحقة</label><input type="number" min="0" step="0.5" id="part_earnedScore" placeholder="مثال: 2"></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:6px">
+      <button type="button" id="part_addPositiveBtn" style="flex:1;background:#2F7A4D">+ إيجابي</button>
+      <button type="button" id="part_addNegativeBtn" style="flex:1;background:#C4483A">− سلبي</button>
+    </div>
+    <div class="field" style="margin-top:10px"><label>ملاحظة (اختياري)</label><input type="text" id="part_note" placeholder="مثال: تفاعل ممتاز بالنقاش"></div>`;
+
+  document.getElementById('part_addPositiveBtn').addEventListener('click', () => submitParticipationEntry(studentId, subject, bucket.eval_type, 'positive'));
+  document.getElementById('part_addNegativeBtn').addEventListener('click', () => submitParticipationEntry(studentId, subject, bucket.eval_type, 'negative'));
+
+  loadParticipationForStudentSubject(studentId, studentName, subject);
+}
+
+async function submitParticipationEntry(studentId, subject, evalType, direction) {
   const participationType = document.getElementById('part_type').value;
+  const sessionMaxScore = Number(document.getElementById('part_sessionMax').value);
+  const earnedScore = Number(document.getElementById('part_earnedScore').value);
   const note = document.getElementById('part_note').value.trim();
-  if (!subject || !evalType) { showToast('حدّد المادة ونوع التقييم', 'error'); return; }
+  if (!sessionMaxScore || sessionMaxScore <= 0) { showToast('حدّد الدرجة الكلية لهذي المشاركة', 'error'); return; }
+  if (document.getElementById('part_earnedScore').value === '') { showToast('حدّد الدرجة المستحقة', 'error'); return; }
+  if (earnedScore > sessionMaxScore) { showToast(`الدرجة المستحقة لا يجب أن تتجاوز الدرجة الكلية (${sessionMaxScore})`, 'error'); return; }
+
   try {
-    await apiCall('academic-config', { method: 'POST', body: { action: 'addParticipationEntry', studentId, subject, evalType, direction, participationType, note: note || null } });
-    showToast(direction === 'positive' ? 'تم تسجيل مشاركة إيجابية' : 'تم تسجيل مشاركة سلبية', 'success');
+    await apiCall('academic-config', { method: 'POST', body: { action: 'addParticipationEntry', studentId, subject, evalType, direction, participationType, sessionMaxScore, earnedScore, note: note || null } });
+    showToast('تم تسجيل المشاركة بنجاح', 'success');
     document.getElementById('part_note').value = '';
+    document.getElementById('part_earnedScore').value = '';
     loadParticipationForStudentSubject(studentId, null, subject);
   } catch (e) { showToast(e.message, 'error'); }
 }
@@ -6083,17 +6317,16 @@ async function loadParticipationForStudentSubject(studentId, studentName, subjec
 
   scoreArea.innerHTML = participationBucket
     ? `<div class="perf-stats-row">
-        <div class="perf-stat-box"><span class="perf-stat-value" style="color:#2F7A4D">${participationBucket.positiveCount}</span><span class="perf-stat-label">إيجابي</span></div>
-        <div class="perf-stat-box"><span class="perf-stat-value" style="color:#C4483A">${participationBucket.negativeCount}</span><span class="perf-stat-label">سلبي</span></div>
-        <div class="perf-stat-box"><span class="perf-stat-value">${participationBucket.contribution} / ${participationBucket.weight}</span><span class="perf-stat-label">الدرجة المستحقة</span></div>
+        <div class="perf-stat-box"><span class="perf-stat-value">${participationBucket.entriesCount}</span><span class="perf-stat-label">عدد القيود</span></div>
+        <div class="perf-stat-box"><span class="perf-stat-value">${participationBucket.contribution} / ${participationBucket.weight}</span><span class="perf-stat-label">الدرجة المستحقة الإجمالية</span></div>
       </div>`
-    : '<p style="color:#888;font-size:12px">لا يوجد نوع تقييم مطابق بتوزيع درجات هذي المادة بعد — أضِف نوع التقييم بالإعدادات أولاً</p>';
+    : '';
 
   historyArea.innerHTML = `
     <div class="filter-card-title">السجل</div>
     ${log.length ? log.map((entry) => `
       <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px;margin-top:6px">
-        <span style="font-size:12px">${entry.direction === 'positive' ? '🟢' : '🔴'} ${escapeHtml(entry.participation_type || entry.eval_type)}${entry.note ? ' — ' + escapeHtml(entry.note) : ''}</span>
+        <span style="font-size:12px">${entry.direction === 'positive' ? '🟢' : '🔴'} ${escapeHtml(entry.participation_type || entry.eval_type)} — ${entry.earned_score ?? '—'}/${entry.session_max_score ?? '—'}${entry.note ? ' — ' + escapeHtml(entry.note) : ''}</span>
         <div style="display:flex;align-items:center;gap:8px">
           <span style="font-size:11px;color:var(--text-muted)">${new Date(entry.recorded_at).toLocaleString('ar-SA-u-ca-gregory')}</span>
           <button type="button" class="btn-icon-delete" data-delete-part="${entry.id}" title="حذف">${ICONS.trash()}</button>
@@ -6109,6 +6342,122 @@ async function loadParticipationForStudentSubject(studentId, studentName, subjec
         loadParticipationForStudentSubject(studentId, studentName, subject);
       } catch (e) { showToast(e.message, 'error'); }
     });
+  });
+}
+
+/* ----- نمط 2: كشف صف/شعبة كامل ----- */
+
+async function renderParticipationClassMode() {
+  const area = document.getElementById('participationModeArea');
+  const settings = await getSettingsOnce();
+  const isAdmin = APP.user.role === 'role_admin';
+  const isTeacher = APP.user.role === 'role_teacher';
+  const subjectOptions = isTeacher ? (APP.user.subject || []) : (settings.subjects || []);
+  const gradeOptions = isTeacher ? (APP.user.grades || []) : (settings.grades || []);
+  const sectionOptions = isTeacher ? (APP.user.sections || []) : (settings.sections || []);
+  const branch = isAdmin ? (settings.branches || [])[0] : APP.user.branch;
+
+  area.innerHTML = `
+    <div class="af-grid-row">
+      <div class="field"><label>المادة</label><select id="pc_subject">${subjectOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+      <div class="field"><label>الصف</label><select id="pc_grade">${gradeOptions.map((g) => `<option value="${escapeHtml(g)}">${escapeHtml(g)}</option>`).join('')}</select></div>
+      <div class="field"><label>الشعبة</label><select id="pc_section">${sectionOptions.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join('')}</select></div>
+    </div>
+    <div id="pc_bucketInfo" style="margin-bottom:10px"></div>
+    <div id="pc_formArea"></div>
+    <div id="pc_rosterArea" style="margin-top:16px"></div>`;
+
+  const refreshBucket = async () => {
+    const subject = document.getElementById('pc_subject').value;
+    const infoBox = document.getElementById('pc_bucketInfo');
+    const formArea = document.getElementById('pc_formArea');
+    let bucket;
+    try { bucket = await fetchParticipationBucket_(subject); } catch (e) { infoBox.innerHTML = `<p style="color:#c62828;font-size:12px">${escapeHtml(e.message)}</p>`; return; }
+    if (!bucket) {
+      infoBox.innerHTML = `<p style="color:#c47a00;font-size:12px">⚠️ لا يوجد نوع تقييم مُعلَّم كـ"المشاركة والتفاعل" لهذي المادة — الأدمن يحدّده من الإعدادات ← توزيع الدرجات</p>`;
+      formArea.innerHTML = ''; document.getElementById('pc_rosterArea').innerHTML = '';
+      return;
+    }
+    infoBox.innerHTML = `<p style="color:#2F7A4D;font-size:12px">✅ ${escapeHtml(bucket.eval_type)} — الحد الأقصى العام لهذي المادة: ${bucket.max_grade}</p>`;
+    formArea.innerHTML = `
+      <div class="af-grid-row-2">
+        <div class="field"><label>نوع المشاركة</label><select id="pc_type">${PARTICIPATION_TYPES_.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('')}</select></div>
+        <div class="field"><label>الدرجة الكلية لهذي المشاركة (لكل الصف)</label><input type="number" min="0.5" step="0.5" id="pc_sessionMax" placeholder="مثال: 3"></div>
+      </div>
+      <button type="button" id="pc_showRosterBtn" style="width:100%">عرض الكشف</button>`;
+    document.getElementById('pc_showRosterBtn').addEventListener('click', () => loadParticipationClassRoster(branch, bucket.eval_type));
+  };
+  document.getElementById('pc_subject').addEventListener('change', refreshBucket);
+  refreshBucket();
+}
+
+async function loadParticipationClassRoster(branch, evalType) {
+  const sessionMax = Number(document.getElementById('pc_sessionMax').value);
+  if (!sessionMax || sessionMax <= 0) { showToast('حدّد الدرجة الكلية لهذي المشاركة', 'error'); return; }
+  const grade = document.getElementById('pc_grade').value;
+  const section = document.getElementById('pc_section').value;
+  const rosterArea = document.getElementById('pc_rosterArea');
+  rosterArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
+
+  let roster;
+  try {
+    roster = await apiCall('academic-config', { method: 'POST', body: { action: 'listStudentsForGradingSheet', branch, grade, section } });
+  } catch (e) { rosterArea.innerHTML = `<p style="color:#c62828">${escapeHtml(e.message)}</p>`; return; }
+  if (!roster.length) { rosterArea.innerHTML = '<p style="color:#888">لا يوجد طلاب مطابقون</p>'; return; }
+
+  rosterArea.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:6px">
+      ${roster.map((s) => `
+        <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
+          <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(s.name_ar)}</span>
+          <div style="display:flex;gap:4px">
+            <button type="button" class="pc-dir-btn" data-pc-dir="positive" data-pc-student="${s.id}" style="background:#2F7A4D;padding:6px 10px">+</button>
+            <button type="button" class="pc-dir-btn" data-pc-dir="negative" data-pc-student="${s.id}" style="background:#C4483A;padding:6px 10px">−</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px">
+            <input type="number" min="0" max="${sessionMax}" step="0.5" placeholder="الدرجة" style="width:80px" data-pc-score="${s.id}">
+            <span style="font-size:11.5px;color:var(--text-muted)">من ${sessionMax}</span>
+          </div>
+        </div>`).join('')}
+    </div>
+    <button type="button" id="pc_saveBtn" style="width:100%;margin-top:14px">حفظ للصف كامل</button>`;
+
+  const directions = {};
+  rosterArea.querySelectorAll('.pc-dir-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const studentId = btn.getAttribute('data-pc-student');
+      directions[studentId] = btn.getAttribute('data-pc-dir');
+      rosterArea.querySelectorAll(`.pc-dir-btn[data-pc-student="${studentId}"]`).forEach((b) => b.style.opacity = b === btn ? '1' : '0.4');
+    });
+  });
+  rosterArea.querySelectorAll('[data-pc-score]').forEach((input) => {
+    input.addEventListener('input', () => { input.style.borderColor = (input.value !== '' && Number(input.value) > sessionMax) ? '#C4483A' : ''; });
+  });
+
+  document.getElementById('pc_saveBtn').addEventListener('click', async () => {
+    const entries = roster
+      .filter((s) => rosterArea.querySelector(`[data-pc-score="${s.id}"]`).value !== '')
+      .map((s) => ({ studentId: s.id, name: s.name_ar, direction: directions[s.id] || 'positive', earnedScore: Number(rosterArea.querySelector(`[data-pc-score="${s.id}"]`).value) }));
+
+    if (!entries.length) { showToast('أدخل درجة مشاركة لطالب واحد على الأقل', 'error'); return; }
+    const exceeding = entries.filter((e) => e.earnedScore > sessionMax);
+    if (exceeding.length) { showToast(`تجاوز الدرجة الكلية: ${exceeding.map((e) => e.name).join('، ')} — عدّل قبل الحفظ`, 'error'); return; }
+
+    const btn = document.getElementById('pc_saveBtn');
+    btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
+    try {
+      await apiCall('academic-config', {
+        method: 'POST',
+        body: {
+          action: 'addParticipationEntriesForClass', branch, grade, section,
+          subject: document.getElementById('pc_subject').value, evalType,
+          participationType: document.getElementById('pc_type').value, sessionMaxScore: sessionMax,
+          entries: entries.map(({ studentId, direction, earnedScore }) => ({ studentId, direction, earnedScore })),
+        },
+      });
+      showToast('تم حفظ مشاركة الصف بنجاح', 'success');
+      loadParticipationClassRoster(branch, evalType);
+    } catch (e) { showToast(e.message, 'error'); btn.disabled = false; btn.textContent = 'حفظ للصف كامل'; }
   });
 }
 
