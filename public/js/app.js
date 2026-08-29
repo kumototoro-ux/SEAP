@@ -2202,9 +2202,15 @@ async function renderSettingsGradeDistSection(content) {
     const btn = document.getElementById('gd_saveBtn');
     btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
     try {
-      await apiCall('academic-config', { method: 'POST', body: { action: 'saveGradeDistForSubject', subject: document.getElementById('gd_subject').value, entries: gradeDistCurrentEntries } });
+      const subject = document.getElementById('gd_subject').value;
+      await apiCall('academic-config', { method: 'POST', body: { action: 'saveGradeDistForSubject', subject, entries: gradeDistCurrentEntries } });
       showToast('تم حفظ التوزيع بنجاح', 'success');
+      // 🆕 إعادة مزامنة الحالة المحلية من الخادم فعلياً بعد الحفظ الناجح
+      // (كانت تُترَك كما هي بلا تحديث — أي مشكلة حفظ سابقة كانت تُخفى
+      // بصمت لحين إعادة فتح الصفحة، وهذا ما بدا كـ"إعادة تفعيل الصح")
       APP.allGradeDist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
+      gradeDistCurrentEntries = APP.allGradeDist.filter((r) => r.subject === subject).map((r) => ({ evalType: r.eval_type, maxScore: Number(r.max_grade), isParticipation: !!r.is_participation }));
+      renderGradeDistEntries();
     } catch (e) { showToast(e.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = 'حفظ توزيع هذي المادة'; }
   });
