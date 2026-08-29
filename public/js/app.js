@@ -3533,8 +3533,33 @@ async function renderMessagesView() {
   renderMsgInboxTab();
 }
 
+/* -------------------- 🆕 الوارد بحلّة بريد إلكتروني حقيقية -------------------- */
+
+let msgFilterMode_ = 'all'; // 'all' | 'inbox' | 'sent' | 'unread'
+let msgSearchQuery_ = '';
+
 function renderMsgInboxTab() {
-  document.getElementById('msgTabContent').innerHTML = `<div id="threadsListArea"><div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div></div>`;
+  document.getElementById('msgTabContent').innerHTML = `
+    <div class="card">
+      <div class="field"><label>بحث بالموضوع أو الاسم</label><input type="text" id="msgSearchInput" placeholder="ابحث..."></div>
+      <div class="segmented-control" id="msgFilterBar">
+        <button type="button" class="segmented-item ${msgFilterMode_ === 'all' ? 'active' : ''}" data-msg-filter="all">الكل</button>
+        <button type="button" class="segmented-item ${msgFilterMode_ === 'inbox' ? 'active' : ''}" data-msg-filter="inbox">الوارد</button>
+        <button type="button" class="segmented-item ${msgFilterMode_ === 'sent' ? 'active' : ''}" data-msg-filter="sent">المرسَل</button>
+        <button type="button" class="segmented-item ${msgFilterMode_ === 'unread' ? 'active' : ''}" data-msg-filter="unread">غير مقروء</button>
+      </div>
+    </div>
+    <div id="threadsListArea"><div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div></div>`;
+
+  document.getElementById('msgSearchInput').addEventListener('input', (e) => { msgSearchQuery_ = e.target.value.trim().toLowerCase(); renderThreadsList(); });
+  document.querySelectorAll('#msgFilterBar .segmented-item').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      msgFilterMode_ = btn.getAttribute('data-msg-filter');
+      document.querySelectorAll('#msgFilterBar .segmented-item').forEach((b) => b.classList.toggle('active', b === btn));
+      renderThreadsList();
+    });
+  });
+
   loadMyThreads();
 }
 
@@ -3586,26 +3611,59 @@ async function renderMsgBlockedTab() {
 
   content.querySelectorAll('[data-unblock]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('تأكيد رفع الحظر عن هذا الحساب؟')) return;
+      if (!(await showConfirmDialog_('تأكيد رفع الحظر عن هذا الحساب؟', { confirmText: 'رفع الحظر' }))) return;
       await apiCall('audit-log', { method: 'POST', body: { action: 'unblockSender', id: btn.getAttribute('data-unblock') } });
       renderMsgBlockedTab();
     });
   });
 }
 
+/** 🆕 وقت نسبي مختصر (زي "قبل 5 دقائق"، "أمس") — أكثر ملاءمة لقائمة بريد من تاريخ/وقت كامل بكل سطر */
+function formatRelativeTime_(dateStr) {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return 'الآن';
+  if (mins < 60) return `قبل ${mins} د`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `قبل ${hours} س`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'أمس';
+  if (days < 7) return `قبل ${days} أيام`;
+  return new Date(dateStr).toLocaleDateString('ar-SA-u-ca-gregory', { day: 'numeric', month: 'short' });
+}
+
 async function loadMyThreads() {
   const area = document.getElementById('threadsListArea');
-  const threads = await apiCall('audit-log', { method: 'POST', body: { action: 'listMyThreads' } });
+  try {
+    APP.allThreads = await apiCall('audit-log', { method: 'POST', body: { action: 'listMyThreads' } });
+  } catch (e) { area.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`; return; }
+  renderThreadsList();
+}
 
-  if (!threads.length) { area.innerHTML = '<div class="card"><p style="color:#888">لا توجد مراسلات بعد</p></div>'; return; }
+function renderThreadsList() {
+  const area = document.getElementById('threadsListArea');
+  const threads = (APP.allThreads || []).filter((t) => {
+    if (msgFilterMode_ === 'inbox' && t.isSender) return false;
+    if (msgFilterMode_ === 'sent' && !t.isSender) return false;
+    if (msgFilterMode_ === 'unread' && !t.isUnread) return false;
+    if (msgSearchQuery_ && !((t.subject || '').toLowerCase().includes(msgSearchQuery_) || (t.counterpartName || '').toLowerCase().includes(msgSearchQuery_))) return false;
+    return true;
+  });
 
-  area.innerHTML = `<div class="card">${threads.map((t) => `
-    <div class="person-card-row" data-open-thread="${t.id}" style="padding:12px 0;border-bottom:1px solid var(--surface);cursor:pointer">
-      <div>
-        <div style="font-weight:700;font-size:13.5px">${t.context_type === 'grade_reopen_request' ? '🔓 ' : ''}${escapeHtml(t.subject)}</div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${new Date(t.created_at).toLocaleString('ar')}</div>
+  if (!threads.length) { area.innerHTML = '<div class="card"><p style="color:#888">لا توجد مراسلات مطابقة</p></div>'; return; }
+
+  area.innerHTML = `<div class="card" style="padding:8px">${threads.map((t) => `
+    <div class="mail-thread-row ${t.isUnread ? 'is-unread' : ''}" data-open-thread="${t.id}">
+      <span class="mail-avatar">${escapeHtml((t.counterpartName || '؟').trim().charAt(0))}</span>
+      <div class="mail-thread-info">
+        <div class="mail-thread-top">
+          <span class="mail-thread-name">${t.isSender ? 'إلى: ' : ''}${escapeHtml(t.counterpartName)}</span>
+          <span class="mail-thread-time">${formatRelativeTime_(t.lastMessageAt)}</span>
+        </div>
+        <div class="mail-thread-subject">${t.context_type === 'grade_reopen_request' || t.context_type === 'sheet_reopen_request' ? `${ICONS.lock()} ` : ''}${escapeHtml(t.subject)}</div>
+        <div class="mail-thread-snippet">${escapeHtml(t.lastMessageSnippet || '')}</div>
       </div>
-      <span>${ICONS.chevronDown()}</span>
+      ${t.isUnread ? '<span class="mail-unread-dot"></span>' : ''}
     </div>`).join('')}</div>`;
 
   area.querySelectorAll('[data-open-thread]').forEach((el) => {
@@ -3614,22 +3672,35 @@ async function loadMyThreads() {
   });
 }
 
-async function openThreadView(threadId, threadMeta) {
-  const messages = await apiCall('audit-log', { method: 'POST', body: { action: 'getThread', threadId } });
+/* -------------------- 🆕 فتح رسالة — صفحة كاملة (لا نافذة صغيرة) لتجربة قراءة بريدية حقيقية -------------------- */
 
-  const { close } = showDetailModal('المحادثة', null, []);
-  const body = document.getElementById('modalBodyContent');
-  // 🆕 زر "فتح التعديل/الكشف" — يظهر فقط للأدمن، وفقط لو الموضوع مرتبط فعلياً بطلب إعادة فتح
+async function openThreadView(threadId, threadMeta) {
+  const container = document.getElementById('msgTabContent');
+  container.innerHTML = `<div class="card"><div class="skel-rows"><div class="skel-row"></div></div></div>`;
+
+  let messages;
+  try {
+    messages = await apiCall('audit-log', { method: 'POST', body: { action: 'getThread', threadId } });
+  } catch (e) { container.innerHTML = `<div class="card"><p style="color:#c62828">${escapeHtml(e.message)}</p></div>`; return; }
+
   const isGradeReopenRequest = APP.user.role === 'role_admin' && threadMeta?.context_type === 'grade_reopen_request';
   const isSheetReopenRequest = APP.user.role === 'role_admin' && threadMeta?.context_type === 'sheet_reopen_request';
-  body.innerHTML = `
-    ${isGradeReopenRequest ? `<button type="button" id="reopenGradeBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">${ICONS.lock()} فتح التعديل ليوم كامل للمعلم</button>` : ''}
-    ${isSheetReopenRequest ? `<button type="button" id="reopenSheetBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">${ICONS.lock()} فتح الكشف ليوم كامل للمعلم</button>` : ''}
-    <div id="threadMessagesArea" style="max-height:320px;overflow-y:auto;margin-bottom:14px"></div>
-    <div class="student-search-input-wrap">
-      <input type="text" id="threadReplyInput" placeholder="اكتب ردّك...">
-    </div>
-    <button type="button" id="threadReplyBtn" style="margin-top:10px;width:100%">إرسال</button>`;
+
+  container.innerHTML = `
+    <div class="card">
+      <button type="button" id="backToInboxBtn" class="mail-back-btn">→ رجوع للوارد</button>
+      <h3 style="margin:0 0 4px">${threadMeta?.context_type === 'grade_reopen_request' || threadMeta?.context_type === 'sheet_reopen_request' ? `${ICONS.lock()} ` : ''}${escapeHtml(threadMeta?.subject || '')}</h3>
+      ${threadMeta?.counterpartName ? `<p style="color:#888;font-size:12px;margin:0 0 14px">${threadMeta.isSender ? 'إلى' : 'من'}: ${escapeHtml(threadMeta.counterpartName)}</p>` : ''}
+      ${isGradeReopenRequest ? `<button type="button" id="reopenGradeBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">${ICONS.lock()} فتح التعديل ليوم كامل للمعلم</button>` : ''}
+      ${isSheetReopenRequest ? `<button type="button" id="reopenSheetBtn" style="width:100%;margin-bottom:14px;background:#2F7A4D">${ICONS.lock()} فتح الكشف ليوم كامل للمعلم</button>` : ''}
+      <div id="threadMessagesArea" class="mail-messages-area"></div>
+      <div class="mail-reply-box">
+        <input type="text" id="threadReplyInput" placeholder="اكتب ردّك...">
+        <button type="button" id="threadReplyBtn">إرسال</button>
+      </div>
+    </div>`;
+
+  document.getElementById('backToInboxBtn').addEventListener('click', () => { renderMsgInboxTab(); });
 
   if (isGradeReopenRequest) {
     document.getElementById('reopenGradeBtn').addEventListener('click', async () => {
@@ -3654,13 +3725,19 @@ async function openThreadView(threadId, threadMeta) {
     });
   }
 
-  document.getElementById('threadMessagesArea').innerHTML = messages.map((m) => `
-    <div style="text-align:${m.sender_id === APP.user.id ? 'left' : 'right'};margin-bottom:10px">
-      <div style="display:inline-block;max-width:80%;padding:8px 12px;border-radius:12px;background:${m.sender_id === APP.user.id ? 'var(--accent-green)' : 'var(--surface)'};font-size:13px;white-space:pre-line">
+  document.getElementById('threadMessagesArea').innerHTML = messages.map((m) => {
+    const isMine = m.sender_id === APP.user.id;
+    return `
+    <div class="mail-message-row ${isMine ? 'is-mine' : ''}">
+      <div class="mail-message-bubble">
         ${escapeHtml(m.body)}
+        ${m.image_url ? `<img src="${escapeHtml(m.image_url)}" class="mail-message-image" alt="صورة مرفقة">` : ''}
       </div>
-      <div style="font-size:10px;color:var(--text-muted);margin-top:2px">${new Date(m.created_at).toLocaleString('ar')}${m.is_original ? ' 📌' : ''}</div>
-    </div>`).join('');
+      <div class="mail-message-time">${new Date(m.created_at).toLocaleString('ar-SA-u-ca-gregory')}${m.is_original ? ' 📌' : ''}</div>
+    </div>`;
+  }).join('');
+  const messagesArea = document.getElementById('threadMessagesArea');
+  messagesArea.scrollTop = messagesArea.scrollHeight; // 🆕 يبدأ العرض من آخر رسالة مباشرة (كأي عميل بريد)
 
   document.getElementById('threadReplyBtn').addEventListener('click', async () => {
     const input = document.getElementById('threadReplyInput');
@@ -3669,9 +3746,11 @@ async function openThreadView(threadId, threadMeta) {
     try {
       await apiCall('audit-log', { method: 'POST', body: { action: 'reply', threadId, body: text } });
       input.value = '';
-      close();
-      openThreadView(threadId);
+      openThreadView(threadId, threadMeta);
     } catch (e) { showToast(e.message, 'error'); }
+  });
+  document.getElementById('threadReplyInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('threadReplyBtn').click();
   });
 }
 
@@ -3769,6 +3848,7 @@ function openComposeMessageModal(prefill) {
       });
       showToast('تم الإرسال بنجاح', 'success');
       close();
+      if (document.getElementById('threadsListArea')) loadMyThreads(); // 🆕 يحدّث القائمة فوراً لو صفحة المراسلات مفتوحة خلف النافذة
     } catch (e) { showToast(e.message, 'error'); }
     finally { btn.disabled = false; btn.textContent = 'إرسال'; }
   });
