@@ -3757,6 +3757,36 @@ function wireFormToggle(toggleBtnId, formCardId, defaultLabel) {
  * بشكل موحَّد. تُستخدَم بكل صفحات الأشخاص الثلاث، بلا أي تكرار كود.
  * footerHtml اختياري — محتوى إضافي (أزرار إجراءات مثلاً) أسفل النافذة.
  */
+/** 🆕 نافذة تأكيد احترافية موحَّدة بهوية الموقع — بديل نافذة confirm()
+ * البدائية للمتصفح (كانت تظهر بشكل غريب وغير متّسق مع تصميم الموقع،
+ * خصوصاً بالجوال). تُرجِع Promise<boolean> — استخدامها: await showConfirmDialog_('نص السؤال')
+ * options اختيارية: { confirmText, cancelText, danger } */
+function showConfirmDialog_(message, options = {}) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-dialog-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog-card">
+        <p class="confirm-dialog-message">${escapeHtml(message)}</p>
+        <div class="confirm-dialog-actions">
+          <button type="button" class="confirm-dialog-cancel">${escapeHtml(options.cancelText || 'إلغاء')}</button>
+          <button type="button" class="confirm-dialog-confirm ${options.danger ? 'is-danger' : ''}">${escapeHtml(options.confirmText || 'تأكيد')}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('show'));
+
+    const finish = (result) => {
+      overlay.classList.remove('show');
+      setTimeout(() => overlay.remove(), 180);
+      resolve(result);
+    };
+    overlay.querySelector('.confirm-dialog-cancel').addEventListener('click', () => finish(false));
+    overlay.querySelector('.confirm-dialog-confirm').addEventListener('click', () => finish(true));
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) finish(false); });
+  });
+}
+
 function showDetailModal(title, subtitle, rows, footerHtml) {
   const existing = document.getElementById('detailModalOverlay');
   if (existing) existing.remove();
@@ -5888,8 +5918,8 @@ function renderAssignmentRosterRows(assignmentId, assignment, roster) {
         return `
         <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
           <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(r.student_name)}${!canEditThis ? ` <span style="color:#C4483A">${ICONS.lock()}</span>` : ''}</span>
-          <input type="number" min="0" max="${assignment.max_score}" step="0.5" value="${gr && gr.score !== null ? gr.score : ''}" placeholder="الدرجة" style="width:90px" data-grade-score="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
-          <input type="text" value="${gr ? escapeHtml(gr.participation_note || '') : ''}" placeholder="ملاحظة" style="flex:1;min-width:120px" data-grade-note="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
+          <input type="number" min="0" max="${assignment.max_score}" step="0.5" value="${gr && gr.score !== null ? gr.score : ''}" placeholder="الدرجة" class="rs-score-input" data-grade-score="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
+          <input type="text" value="${gr ? escapeHtml(gr.participation_note || '') : ''}" placeholder="ملاحظة" class="rs-note-input" data-grade-note="${r.student_id}" ${canEditThis ? '' : 'disabled'}>
           <button type="button" class="btn-outline-sm" data-save-grade="${r.student_id}" ${canEditThis ? '' : 'disabled'}>حفظ</button>
           ${gr ? `<button type="button" class="btn-icon-delete" data-delete-grade="${r.student_id}" ${canDeleteThis ? '' : 'disabled'} title="حذف">${ICONS.trash()}</button>` : ''}
           ${canRequestReopen ? `<button type="button" class="btn-outline-sm" data-request-reopen="${r.student_id}" style="color:#C4483A;border-color:#C4483A">طلب فتح من الأدمن</button>` : ''}
@@ -5913,7 +5943,7 @@ function renderAssignmentRosterRows(assignmentId, assignment, roster) {
   });
   rosterArea.querySelectorAll('[data-delete-grade]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('حذف رصد هذا الطالب نهائياً؟')) return;
+      if (!(await showConfirmDialog_('حذف رصد هذا الطالب نهائياً؟', { confirmText: 'حذف', danger: true }))) return;
       try {
         await apiCall('academic-config', { method: 'POST', body: { action: 'deleteAssignmentGrade', assignmentId, studentId: btn.getAttribute('data-delete-grade') } });
         showToast('تم الحذف', 'success');
@@ -6009,11 +6039,11 @@ async function openNewSheetFlow() {
         ${roster.map((s) => `
           <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
             <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(s.name_ar)}</span>
-            <div style="display:flex;align-items:center;gap:4px">
-              <input type="number" min="0" max="${maxScoreForDisplay}" step="0.5" placeholder="الدرجة" style="width:80px" data-ns-score="${s.id}">
-              <span style="font-size:11.5px;color:var(--text-muted);white-space:nowrap">من ${maxScoreForDisplay}</span>
+            <div class="rs-score-wrap">
+              <input type="number" min="0" max="${maxScoreForDisplay}" step="0.5" placeholder="الدرجة" class="rs-score-input" data-ns-score="${s.id}">
+              <span class="rs-score-max-label">من ${maxScoreForDisplay}</span>
             </div>
-            <input type="text" placeholder="ملاحظة" style="flex:1;min-width:120px" data-ns-note="${s.id}">
+            <input type="text" placeholder="ملاحظة" class="rs-note-input" data-ns-note="${s.id}">
           </div>`).join('')}
       </div>
       <button type="button" id="ns_saveSheetBtn" style="width:100%;margin-top:14px">حفظ الكشف</button>`;
@@ -6041,7 +6071,7 @@ async function openNewSheetFlow() {
       if (exceeding.length) { showToast(`تجاوز الدرجة الكلية: ${exceeding.map((e) => e.name).join('، ')} — عدّل الدرجة قبل الحفظ`, 'error'); return; }
 
       const missing = entries.filter((e) => e.score === null);
-      if (missing.length && !confirm(`لم تُرصد درجة للطلاب: ${missing.map((e) => e.name).join('، ')}. هل تريد الحفظ مع ذلك؟`)) return;
+      if (missing.length && !(await showConfirmDialog_(`لم تُرصد درجة للطلاب: ${missing.map((e) => e.name).join('، ')}. هل تريد الحفظ مع ذلك؟`, { confirmText: 'حفظ مع ذلك' }))) return;
 
       const btn = document.getElementById('ns_saveSheetBtn');
       btn.disabled = true; btn.textContent = 'جارِ الحفظ...';
@@ -6104,8 +6134,8 @@ async function openSheetDetail(sheetId, returnTo) {
       ${entries.map((e) => `
         <div class="person-card-row" style="padding:10px 12px;background:var(--surface);border-radius:8px;flex-wrap:wrap;gap:8px">
           <span style="font-size:12.5px;font-weight:700;min-width:140px">${escapeHtml(e.student_name)}</span>
-          <input type="number" min="0" max="${sheet.max_score}" step="0.5" value="${e.score !== null ? e.score : ''}" style="width:90px" data-sheet-score="${e.student_id}" ${canEdit ? '' : 'disabled'}>
-          <input type="text" value="${escapeHtml(e.note || '')}" placeholder="ملاحظة" style="flex:1;min-width:120px" data-sheet-note="${e.student_id}" ${canEdit ? '' : 'disabled'}>
+          <input type="number" min="0" max="${sheet.max_score}" step="0.5" value="${e.score !== null ? e.score : ''}" class="rs-score-input" data-sheet-score="${e.student_id}" ${canEdit ? '' : 'disabled'}>
+          <input type="text" value="${escapeHtml(e.note || '')}" placeholder="ملاحظة" class="rs-note-input" data-sheet-note="${e.student_id}" ${canEdit ? '' : 'disabled'}>
         </div>`).join('')}
     </div>
     ${canEdit ? `<button type="button" id="saveSheetEntriesBtn" style="width:100%;margin-top:14px">حفظ التعديلات</button>` : ''}`;
@@ -6122,7 +6152,7 @@ async function openSheetDetail(sheetId, returnTo) {
       const exceeding = updated.filter((e) => e.score !== null && e.score > sheet.max_score);
       if (exceeding.length) { showToast(`تجاوز الدرجة الكلية: ${exceeding.map((e) => e.name).join('، ')} — عدّل الدرجة قبل الحفظ`, 'error'); return; }
       const missing = updated.filter((e) => e.score === null);
-      if (missing.length && !confirm(`لم تُرصد درجة للطلاب: ${missing.map((e) => e.name).join('، ')}. هل تريد الحفظ مع ذلك؟`)) return;
+      if (missing.length && !(await showConfirmDialog_(`لم تُرصد درجة للطلاب: ${missing.map((e) => e.name).join('، ')}. هل تريد الحفظ مع ذلك؟`, { confirmText: 'حفظ مع ذلك' }))) return;
 
       try {
         await apiCall('academic-config', { method: 'POST', body: { action: 'updateGradingSheetEntries', sheetId, entries: updated.map(({ studentId, score, note }) => ({ studentId, score, note })) } });
@@ -6326,7 +6356,7 @@ async function loadParticipationForStudentSubject(studentId, studentName, subjec
 
   historyArea.querySelectorAll('[data-delete-part]').forEach((btn) => {
     btn.addEventListener('click', async () => {
-      if (!confirm('حذف هذا القيد نهائياً؟')) return;
+      if (!(await showConfirmDialog_('حذف هذا القيد نهائياً؟', { confirmText: 'حذف', danger: true }))) return;
       try {
         await apiCall('academic-config', { method: 'POST', body: { action: 'deleteParticipationEntry', id: btn.getAttribute('data-delete-part') } });
         showToast('تم الحذف', 'success');
@@ -6405,9 +6435,9 @@ async function loadParticipationClassRoster(branch, evalType) {
             <button type="button" class="pc-dir-btn" data-pc-dir="positive" data-pc-student="${s.id}" style="background:#2F7A4D;padding:6px 10px">+</button>
             <button type="button" class="pc-dir-btn" data-pc-dir="negative" data-pc-student="${s.id}" style="background:#C4483A;padding:6px 10px">−</button>
           </div>
-          <div style="display:flex;align-items:center;gap:4px">
-            <input type="number" min="0" max="${sessionMax}" step="0.5" placeholder="الدرجة" style="width:80px" data-pc-score="${s.id}">
-            <span style="font-size:11.5px;color:var(--text-muted)">من ${sessionMax}</span>
+          <div class="rs-score-wrap">
+            <input type="number" min="0" max="${sessionMax}" step="0.5" placeholder="الدرجة" class="rs-score-input" data-pc-score="${s.id}">
+            <span class="rs-score-max-label">من ${sessionMax}</span>
           </div>
         </div>`).join('')}
     </div>
