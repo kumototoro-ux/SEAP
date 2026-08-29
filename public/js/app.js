@@ -573,6 +573,7 @@ function renderHomeView() {
     </div>
 
     <div class="kpi-cards-row" id="homeKpiCardsRow" style="margin-top:16px"></div>
+    <div id="homeQuickLinksArea"></div>
     <div class="home-widgets-row" id="homeWidgetsRow" style="margin-top:16px"></div>
   `;
 
@@ -583,6 +584,11 @@ function renderHomeView() {
     homeClockMode = homeClockMode === 'analog' ? 'digital' : 'analog';
     document.getElementById('clockModeToggle').innerHTML = `${ICONS.chevronDown()} ${homeClockMode === 'analog' ? 'رقمية' : 'تناظرية'}`;
     renderClockTick();
+  });
+
+  document.getElementById('homeQuickLinksArea').innerHTML = renderHomeQuickLinks(pages);
+  document.querySelectorAll('[data-quicklink]').forEach((btn) => {
+    btn.addEventListener('click', () => navigate(btn.getAttribute('data-quicklink')));
   });
 
   loadHomeCalendarWidget();
@@ -674,67 +680,103 @@ async function loadHomeCalendarWidget() {
     </div>
     ${activeTerm ? `<p style="color:#888;font-size:12.5px;margin:8px 0">${escapeHtml(activeTerm.name)} — ${formatDateAr(activeTerm.start_date)} ← ${formatDateAr(activeTerm.end_date)}</p>` : '<p style="color:#888;font-size:12.5px;margin:8px 0">لا يوجد فصل دراسي ظاهر حالياً</p>'}
     ${upcoming.length ? `
-      <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px">
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
         ${upcoming.map((e) => `
-          <div class="person-card-row" style="padding:8px 10px;background:var(--surface);border-radius:8px">
-            <span style="font-size:12px">${escapeHtml(e.label)}</span>
-            <span style="font-size:11px;color:var(--text-muted)">${formatDateAr(e.date)}</span>
+          <div class="home-agenda-row">
+            <span class="home-agenda-daybadge">${parseISODateLocal(e.date).getDate()}</span>
+            <div class="home-agenda-info">
+              <span class="home-agenda-label">${escapeHtml(e.label)}</span>
+              <span class="home-agenda-date">${formatDateAr(e.date)}</span>
+            </div>
           </div>`).join('')}
       </div>` : ''}`;
 
   card.querySelector('[data-view="academicCalendar"]')?.addEventListener('click', () => navigate('academicCalendar'));
 }
 
-/** 🆕 بطاقات إحصائية سريعة — كل بطاقة مشروطة بامتلاك المستخدم صلاحية وصول لصفحتها فعلياً */
+/** 🆕 بطاقات إحصائية سريعة — كل بطاقة مشروطة بامتلاك المستخدم صلاحية
+ * وصول لصفحتها فعلياً. أُعيد تصميمها بألوان مميِّزة لكل بطاقة (بدل
+ * بطاقات بيضاء متطابقة) لإحساس بصري أكثر ثراءً واحترافية. */
+const HOME_KPI_ACCENTS_ = ['home-kpi-accent-green', 'home-kpi-accent-gold', 'home-kpi-accent-blue', 'home-kpi-accent-purple', 'home-kpi-accent-coral', 'home-kpi-accent-dark'];
+
 async function loadHomeKpiCards(pages) {
   const row = document.getElementById('homeKpiCardsRow');
   const cards = [];
 
-  if (pages.includes('students')) {
+  if (pages.includes('students') || pages.includes('registrationStats')) {
     try {
-      const students = await apiCall('students', { method: 'POST', body: { action: 'list' } });
-      cards.push({ label: 'الطلاب', value: students.length, view: 'students' });
+      // 🆕 نفضّل getRegistrationStats (عدد دقيق بلا حد أقصى) لو متاحة، وإلا نرجع لقائمة الطلاب المحدودة بفرع المستخدم
+      if (pages.includes('registrationStats')) {
+        const stats = await apiCall('academic-config', { method: 'POST', body: { action: 'getRegistrationStats' } });
+        cards.push({ label: 'إجمالي الطلاب', value: stats.totalStudents, view: 'registrationStats', icon: 'students' });
+      } else if (pages.includes('students')) {
+        const students = await apiCall('students', { method: 'POST', body: { action: 'list' } });
+        cards.push({ label: 'الطلاب', value: students.length, view: 'students', icon: 'students' });
+      }
     } catch (e) { /* تجاهل بصمت */ }
   }
   if (pages.includes('employees')) {
     try {
       const employees = await apiCall('employees', { method: 'POST', body: { action: 'list' } });
-      cards.push({ label: 'الموظفون', value: employees.length, view: 'employees' });
+      cards.push({ label: 'الموظفون', value: employees.length, view: 'employees', icon: 'employees' });
     } catch (e) { /* تجاهل بصمت */ }
   }
   if (pages.includes('messages')) {
     try {
       const unread = await apiCall('audit-log', { method: 'POST', body: { action: 'unreadCount' } });
-      cards.push({ label: 'رسائل غير مقروءة', value: unread.count ?? unread, view: 'messages' });
+      cards.push({ label: 'رسائل غير مقروءة', value: unread.count ?? unread, view: 'messages', icon: 'messages' });
     } catch (e) { /* تجاهل بصمت */ }
   }
   if (pages.includes('assignments')) {
     try {
       const assignments = await apiCall('academic-config', { method: 'POST', body: { action: 'listAssignments' } });
-      cards.push({ label: 'التكاليف والمهام المنشورة', value: assignments.length, view: 'assignments' });
-    } catch (e) { /* تجاهل بصمت */ }
-  }
-  if (pages.includes('registrationStats')) {
-    try {
-      const stats = await apiCall('academic-config', { method: 'POST', body: { action: 'getRegistrationStats' } });
-      cards.push({ label: 'إجمالي الطلاب المسجَّلين', value: stats.totalStudents, view: 'registrationStats' });
+      cards.push({ label: 'التكاليف والمهام المنشورة', value: assignments.length, view: 'assignments', icon: 'clipboard' });
     } catch (e) { /* تجاهل بصمت */ }
   }
   if (pages.includes('performance')) {
-    cards.push({ label: 'تقييم الأداء', value: '←', view: 'performance', isLink: true });
+    cards.push({ label: 'تقييم الأداء', value: '←', view: 'performance', isLink: true, icon: 'tasks' });
   }
 
   if (!cards.length) { row.style.display = 'none'; return; }
 
-  row.innerHTML = cards.map((c) => `
-    <div class="kpi-card" data-home-kpi="${c.view}" style="cursor:pointer">
+  row.innerHTML = cards.map((c, i) => `
+    <div class="kpi-card home-kpi-card ${HOME_KPI_ACCENTS_[i % HOME_KPI_ACCENTS_.length]}" data-home-kpi="${c.view}" style="cursor:pointer">
+      <div class="home-kpi-icon">${ICONS[c.icon] ? ICONS[c.icon]() : ''}</div>
       <div class="kpi-card-label">${escapeHtml(c.label)}</div>
-      <div class="kpi-card-value">${c.isLink ? '' : c.value}${c.isLink ? `<span style="font-size:15px;color:var(--primary)">فتح الصفحة ←</span>` : ''}</div>
+      <div class="kpi-card-value">${c.isLink ? `<span style="font-size:15px">فتح الصفحة ←</span>` : c.value}</div>
     </div>`).join('');
 
   row.querySelectorAll('[data-home-kpi]').forEach((el) => {
     el.addEventListener('click', () => navigate(el.getAttribute('data-home-kpi')));
   });
+}
+
+/** 🆕 روابط سريعة مصوَّرة بألوان مميِّزة لأهم صفحات الموقع ضمن صلاحية
+ * المستخدم — تملأ الصفحة بمحتوى غنياً بصرياً بدل الفراغ، وتسهّل الوصول
+ * السريع لأكثر الصفحات استخداماً. */
+const HOME_QUICK_LINKS_ = [
+  { view: 'academicCalendar', label: 'التقويم الدراسي', icon: 'calendar', accent: 'home-kpi-accent-blue' },
+  { view: 'assignments', label: 'التكاليف والمهام', icon: 'clipboard', accent: 'home-kpi-accent-gold' },
+  { view: 'assignmentGrades', label: 'الرصد والتصحيح', icon: 'guardians', accent: 'home-kpi-accent-green' },
+  { view: 'studentPerformance', label: 'أداء الطلاب', icon: 'students', accent: 'home-kpi-accent-purple' },
+  { view: 'messages', label: 'المراسلات', icon: 'messages', accent: 'home-kpi-accent-coral' },
+  { view: 'students', label: 'الطلاب', icon: 'students', accent: 'home-kpi-accent-dark' },
+  { view: 'employees', label: 'الموظفون', icon: 'employees', accent: 'home-kpi-accent-blue' },
+  { view: 'reports', label: 'التقارير', icon: 'chart', accent: 'home-kpi-accent-gold' },
+];
+
+function renderHomeQuickLinks(pages) {
+  const links = HOME_QUICK_LINKS_.filter((l) => pages.includes(l.view));
+  if (!links.length) return '';
+  return `
+    <div class="filter-card-title" style="margin-top:20px">وصول سريع</div>
+    <div class="home-quicklinks-grid">
+      ${links.map((l) => `
+        <button type="button" class="home-quicklink-tile ${l.accent}" data-quicklink="${l.view}">
+          <span class="home-quicklink-icon">${ICONS[l.icon] ? ICONS[l.icon]() : ''}</span>
+          <span>${escapeHtml(l.label)}</span>
+        </button>`).join('')}
+    </div>`;
 }
 
 /** 🆕 قسمان إضافيان يملآن الفراغ أسفل الرئيسية — آخر الأنشطة (أدمن فقط)
