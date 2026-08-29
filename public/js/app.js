@@ -5953,55 +5953,40 @@ async function openNewSheetFlow() {
     <div class="field"><label>وصف التقييم (اختياري)</label><textarea id="ns_description" rows="2" placeholder="مثال: اختبار ورقي تم إجراؤه داخل المدرسة"></textarea></div>
     <div class="field"><label>تاريخ الرصد</label><input type="date" id="ns_recordDate" value="${todayISO()}"></div>
 
-    <div class="field" style="display:flex;align-items:center;gap:8px;flex-direction:row-reverse;justify-content:flex-end">
-      <label for="ns_manualMaxToggle" style="margin:0;cursor:pointer">تحديد الدرجة الكلية يدوياً لهذا التقييم</label>
-      <input type="checkbox" id="ns_manualMaxToggle" style="width:18px;height:18px;cursor:pointer">
-    </div>
-    <div class="field" id="ns_manualMaxField" style="display:none"><label>الدرجة الكلية (مثال: 20)</label><input type="number" min="0.5" step="0.5" id="ns_manualMaxInput"></div>
-    <div id="ns_maxScoreDisplay" style="margin:10px 0;font-size:12.5px;color:var(--text-muted)"></div>
+    <!-- 🆕 الدرجة الكلية لهذا التقييم بالذات — قرار المعلم دائماً، تختلف
+         من تكليف لآخر (مثال: 12 من 12 لحصة، 15 من 15 لحصة أخرى)، بلا أي
+         سحب تلقائي أو علاقة بوزن الإعدادات إطلاقاً -->
+    <div class="field"><label>الدرجة الكلية لهذا التقييم (مثال: 20)</label><input type="number" min="0.5" step="0.5" id="ns_maxScoreInput" placeholder="حدّد الدرجة القصوى لهذا التكليف بالذات"></div>
+    <div id="ns_weightInfo" style="margin:-6px 0 10px;font-size:11.5px;color:var(--text-muted)"></div>
 
     <button type="button" id="ns_showRosterBtn" style="width:100%">عرض الكشف</button>
     <div id="ns_rosterArea" style="margin-top:16px"></div>`;
 
   document.getElementById('backToRecordBtn').addEventListener('click', renderUnifiedRecordTab);
 
-  document.getElementById('ns_manualMaxToggle').addEventListener('change', (e) => {
-    document.getElementById('ns_manualMaxField').style.display = e.target.checked ? 'block' : 'none';
-    document.getElementById('ns_maxScoreDisplay').style.display = e.target.checked ? 'none' : 'block';
-  });
-
-  const refreshMaxScore = async () => {
-    if (document.getElementById('ns_manualMaxToggle').checked) return; // 🆕 لا حاجة للسحب التلقائي لو المعلم يحدّد يدوياً
+  // 🆕 عرض معلوماتي فقط — يوضّح للمعلم وزن هذا النوع بالدرجة النهائية
+  // (مرجع تجميع ثابت بالإعدادات)، بلا أي تأثير على حقل الدرجة الكلية أعلاه
+  const refreshWeightInfo = async () => {
     const subject = document.getElementById('ns_subject').value;
     const evalType = document.getElementById('ns_evalType').value;
-    const display = document.getElementById('ns_maxScoreDisplay');
-    if (!subject || !evalType) { display.textContent = ''; return; }
+    const info = document.getElementById('ns_weightInfo');
+    if (!subject || !evalType) { info.textContent = ''; return; }
     try {
-      const dist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
-      const match = dist.find((d) => d.subject === subject && d.eval_type === evalType);
-      display.textContent = match ? `✅ الدرجة الكلية المُعرَّفة: ${match.max_grade}` : '⚠️ لا يوجد توزيع درجات مُعرَّف لهذا الاختيار — فعِّل "تحديد الدرجة الكلية يدوياً" أعلاه، أو أضِفه من الإعدادات ← توزيع الدرجات';
-    } catch (e) { display.textContent = ''; }
+      const { weight } = await apiCall('academic-config', { method: 'POST', body: { action: 'getEvalTypeWeight', subject, evalType } });
+      info.textContent = weight !== null
+        ? `ℹ️ علماً بأن وزن "${evalType}" بالدرجة النهائية لمادة "${subject}" = ${weight} من 100 (مرجع تجميع نهائي فقط — لا علاقة له بالدرجة القصوى لهذا التكليف بالذات)`
+        : `⚠️ لا يوجد وزن مُعرَّف لهذا النوع بتوزيع الدرجات بعد — التقييم سيُسجَّل لكنه لن يُحسَب بالدرجة النهائية حتى يضيفه الأدمن بالإعدادات`;
+    } catch (e) { info.textContent = ''; }
   };
-  document.getElementById('ns_subject').addEventListener('change', refreshMaxScore);
-  document.getElementById('ns_evalType').addEventListener('change', refreshMaxScore);
-  refreshMaxScore();
+  document.getElementById('ns_subject').addEventListener('change', refreshWeightInfo);
+  document.getElementById('ns_evalType').addEventListener('change', refreshWeightInfo);
+  refreshWeightInfo();
 
   document.getElementById('ns_showRosterBtn').addEventListener('click', async () => {
     const grade = document.getElementById('ns_grade').value;
     const section = document.getElementById('ns_section').value;
-    const useManualMax = document.getElementById('ns_manualMaxToggle').checked;
-    const manualMaxScore = useManualMax ? Number(document.getElementById('ns_manualMaxInput').value) : null;
-    if (useManualMax && (!manualMaxScore || manualMaxScore <= 0)) { showToast('أدخل درجة كلية صحيحة', 'error'); return; }
-
-    let maxScoreForDisplay = manualMaxScore;
-    if (!useManualMax) {
-      try {
-        const dist = await apiCall('academic-config', { method: 'POST', body: { action: 'listGradeDist' } });
-        const match = dist.find((d) => d.subject === document.getElementById('ns_subject').value && d.eval_type === document.getElementById('ns_evalType').value);
-        if (!match) { showToast('لا يوجد توزيع درجات مُعرَّف — فعِّل التحديد اليدوي أو أضِف التوزيع بالإعدادات أولاً', 'error'); return; }
-        maxScoreForDisplay = Number(match.max_grade);
-      } catch (e) { showToast(e.message, 'error'); return; }
-    }
+    const maxScoreForDisplay = Number(document.getElementById('ns_maxScoreInput').value);
+    if (!maxScoreForDisplay || maxScoreForDisplay <= 0) { showToast('حدّد الدرجة الكلية لهذا التقييم أولاً', 'error'); return; }
 
     const rosterArea = document.getElementById('ns_rosterArea');
     rosterArea.innerHTML = `<div class="skel-rows"><div class="skel-row"></div></div>`;
@@ -6062,7 +6047,7 @@ async function openNewSheetFlow() {
             subject: document.getElementById('ns_subject').value, evalType: document.getElementById('ns_evalType').value,
             title, description: document.getElementById('ns_description').value.trim() || null,
             recordDate: document.getElementById('ns_recordDate').value,
-            manualMaxScore: useManualMax ? manualMaxScore : undefined,
+            maxScore: maxScoreForDisplay,
             entries: entries.map(({ studentId, score, note }) => ({ studentId, score, note })),
           },
         });
