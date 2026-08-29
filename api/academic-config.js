@@ -1670,6 +1670,110 @@ async function handleDeleteParticipationEntry(req, res) {
 // فرعهم فقط. معلم: فرعه + (الصف/الشعبة) اللي يدرّسهم فقط.
 const PERFORMANCE_VIEW_ROLES = ['role_admin', 'role_teacher', 'role_student_sup', 'role_teacher_sup', 'role_branch_monitor'];
 
+/** 🆕 نظام تحليل أداء مرن — يبني نطاقاً فعلياً من تقاطع (ما طلبه
+ * المستخدم) مع (ما يملك صلاحية الوصول له فعلياً حسب دوره) — بلا فرض 4
+ * مستويات إجبارية (فرع←مرحلة←صف←شعبة). أي مستوى فاضي = "الكل" ضمن
+ * صلاحية المستخدم. */
+function buildAnalyticsScope_(user, requested) {
+  const scope = { branches: requested.branches || [], stages: requested.stages || [], grades: requested.grades || [], sections: requested.sections || [] };
+
+  if (user.role === 'role_admin') return scope; // بلا قيد إطلاقاً
+
+  if (user.role === 'role_branch_monitor') {
+    const allowed = user.allBranches || [user.branch];
+    scope.branches = scope.branches.length ? scope.branches.filter((b) => allowed.includes(b)) : allowed;
+    return scope;
+  }
+
+  if (['role_student_sup', 'role_teacher_sup'].includes(user.role)) {
+    scope.branches = [user.branch]; // مقيَّد بفرعه فقط دائماً — لا يقدر يتجاوزه
+    return scope;
+  }
+
+  if (user.role === 'role_teacher') {
+    scope.branches = [user.branch];
+    const allowedGrades = user.grades || [];
+    const allowedSections = user.sections || [];
+    scope.grades = scope.grades.length ? scope.grades.filter((g) => allowedGrades.includes(g)) : allowedGrades;
+    scope.sections = scope.sections.length ? scope.sections.filter((s) => allowedSections.includes(s)) : allowedSections;
+    return scope;
+  }
+
+  scope.branches = ['__none__']; // دور غير مصرَّح — لا يطابق أي شيء
+  return scope;
+}
+
+async function handleGetPerformanceAnalytics(req, res) {
+  const user = requireAuth(req);
+  requireRole(user, PERFORMANCE_VIEW_ROLES);
+  const requested = validateBody(z.object({
+    branches: z.array(z.string()).optional(), stages: z.array(z.string()).optional(),
+    grades: z.array(z.string()).optional(), sections: z.array(z.string()).optional(),
+  }), req.body);
+
+  const scope = buildAnalyticsScope_(user, requested);
+
+  let query = supabaseAdmin.from('grade_aggregation_results').select('student_id, student_name, subject, final_grade, branch, stage, grade, section');
+  if (scope.branches.length) query = query.in('branch', scope.branches);
+  if (scope.stages.length) query = query.in('stage', scope.stages);
+  if (scope.grades.length) query = query.in('grade', scope.grades);
+  if (scope.sections.length) query = query.in('section', scope.sections);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  // 🆕 لكل طالب: متوسط عام (كل مواده)، مع الاحتفاظ بأبعاد التصنيف (فرع/مرحلة/صف/شعبة) لبناء المقارنات
+  const byStudent = {};
+  (data || []).forEach((row) => {
+    if (!byStudent[row.student_id]) {
+      byStudent[row.student_id] = { studentId: row.student_id, name: row.student_name, branch: row.branch, stage: row.stage, grade: row.grade, section: row.section, grades: [] };
+    }
+    byStudent[row.student_id].grades.push(Number(row.final_grade));
+  });
+  const students = Object.values(byStudent).map((s) => ({ ...s, average: Math.round((s.grades.reduce((a, b) => a + b, 0) / s.grades.length) * 100) / 100 }));
+
+  const totalStudents = students.length;
+  const overallAverage = totalStudents ? Math.round((students.reduce((sum, s) => sum + s.average, 0) / totalStudents) * 100) / 100 : 0;
+  const passCount = students.filter((s) => s.average >= 60).length;
+  const passRate = totalStudents ? Math.round((passCount / totalStudents) * 1000) / 10 : 0;
+  const excellentCount = students.filter((s) => s.average >= 90).length;
+  const needsSupportCount = students.filter((s) => s.average < 60).length;
+
+  const levelBuckets = [
+    { label: 'ممتاز (90+)', min: 90, max: 101, color: '#2F7A4D' },
+    { label: 'جيد جداً (80-89)', min: 80, max: 90, color: '#3E7CB1' },
+    { label: 'جيد (70-79)', min: 70, max: 80, color: '#B8860B' },
+    { label: 'مقبول (60-69)', min: 60, max: 70, color: '#C47A00' },
+    { label: 'يحتاج دعم (<60)', min: 0, max: 60, color: '#C4483A' },
+  ];
+  const distribution = levelBuckets.map((b) => ({ label: b.label, color: b.color, value: students.filter((s) => s.average >= b.min && s.average < b.max).length }));
+
+  // 🆕 تجميع حسب أي بُعد (فرع/مرحلة/صف/شعبة) — يبني بيانات المقارنة تلقائياً بلا تحديد مسبق للأبعاد
+  const groupByDimension = (key) => {
+    const map = {};
+    students.forEach((s) => {
+      const k = s[key] || 'غير محدَّد';
+      if (!map[k]) map[k] = [];
+      map[k].push(s.average);
+    });
+    return Object.entries(map).map(([label, vals]) => ({ label, count: vals.length, average: Math.round((vals.reduce((a, b) => a + b, 0) / vals.length) * 100) / 100 }));
+  };
+
+  const topPerformers = [...students].sort((a, b) => b.average - a.average).slice(0, 5).map((s) => ({ name: s.name, average: s.average }));
+  const bottomPerformers = [...students].sort((a, b) => a.average - b.average).slice(0, 5).map((s) => ({ name: s.name, average: s.average }));
+
+  return res.status(200).json({
+    success: true,
+    data: {
+      totalStudents, overallAverage, passRate, excellentPct: totalStudents ? Math.round((excellentCount / totalStudents) * 1000) / 10 : 0,
+      needsSupportPct: totalStudents ? Math.round((needsSupportCount / totalStudents) * 1000) / 10 : 0,
+      distribution, topPerformers, bottomPerformers,
+      byBranch: groupByDimension('branch'), byStage: groupByDimension('stage'), byGrade: groupByDimension('grade'), bySection: groupByDimension('section'),
+      students: students.map((s) => ({ studentId: s.studentId, name: s.name, branch: s.branch, stage: s.stage, grade: s.grade, section: s.section, average: s.average })),
+    },
+  });
+}
+
 /** 🆕 يتحقّق أن (فرع/صف/شعبة) الطالب المستهدَف ضمن نطاق صلاحية المستخدم */
 function assertStudentInPerformanceScope_(user, student) {
   if (user.role === 'role_admin') return;
@@ -1903,6 +2007,7 @@ export default createRouter({
   listParticipationLog: handleListParticipationLog,
   deleteParticipationEntry: handleDeleteParticipationEntry,
   searchStudentsForPerformance: handleSearchStudentsForPerformance,
+  getPerformanceAnalytics: handleGetPerformanceAnalytics,
   getStudentPerformanceReport: handleGetStudentPerformanceReport,
   getClassPerformanceSummary: handleGetClassPerformanceSummary,
   getRegistrationStats: handleGetRegistrationStats,
